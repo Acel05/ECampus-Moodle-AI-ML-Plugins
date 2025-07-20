@@ -1,0 +1,24 @@
+2025-07-09 16:41:25,803 - ml_backend - INFO - Training request received for course 14 using randomforest
+2025-07-09 16:41:25,889 - ml_backend - ERROR - Error training model: 
+Traceback (most recent call last):
+  File "C:\xampp\htdocs\moodle\blocks\studentperformancepredictor\ml_backend.py", line 175, in train_model
+    detail=f"Target column '{request.target_column}' not found in dataset"
+fastapi.exceptions.HTTPException
+2025-07-09 16:41:26,162 - ml_backend - INFO - Training request received for course 14 using randomforest
+2025-07-09 16:41:26,167 - ml_backend - ERROR - Error training model: 
+Traceback (most recent call last):
+  File "C:\xampp\htdocs\moodle\blocks\studentperformancepredictor\ml_backend.py", line 175, in train_model
+    detail=f"Target column '{request.target_column}' not found in dataset"
+fastapi.exceptions.HTTPException
+2025-07-09 16:46:47,519 - ml_backend - INFO - Training request received for course 14 using randomforest
+2025-07-09 16:46:51,735 - ml_backend - ERROR - Error training model: 
+Traceback (most recent call last):
+  File "C:\xampp\htdocs\moodle\blocks\studentperformancepredictor\ml_backend.py", line 175, in train_model
+    raise HTTPException(
+fastapi.exceptions.HTTPException
+2025-07-09 16:46:52,117 - ml_backend - INFO - Training request received for course 14 using randomforest
+2025-07-09 16:46:52,121 - ml_backend - ERROR - Error training model: 
+Traceback (most recent call last):
+  File "C:\xampp\htdocs\moodle\blocks\studentperformancepredictor\ml_backend.py", line 175, in train_model
+    raise HTTPException(
+fastapi.exceptions.HTTPException

@@ -1,0 +1,104 @@
+{{!
+    This file is part of Moodle - http://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+}}
+{{!
+    @template block_studentperformancepredictor/admin_settings
+
+    Admin settings template
+
+    Context variables required for this template:
+    * heading - Block heading
+    * courseid - Course ID
+    * hasmodel - Whether there is an active model
+    * nomodeltext - Text to display when there is no model
+    * managemodelsurl - URL to manage models page
+    * managedatasetsurl - URL to manage datasets page
+    * refreshpredictionsurl - URL to refresh predictions page
+    * totalstudents - Total number of students
+    * highrisk - Number of high risk students
+    * mediumrisk - Number of medium risk students
+    * lowrisk - Number of low risk students
+    * highriskpercent - Percentage of high risk students
+    * mediumriskpercent - Percentage of medium risk students
+    * lowriskpercent - Percentage of low risk students
+    * haschart - Whether to show chart
+    * chartdata - Chart data in JSON format
+}}
+
+<section class="block_studentperformancepredictor mb-4" data-course-id="{{courseid}}">
+    <header>
+        <h4 class="spp-heading">{{heading}}</h4>
+    </header>
+
+    <div class="spp-admin-actions mb-3">
+        <div class="btn-group" role="group">
+            <a href="{{managemodelsurl}}" class="btn btn-primary">
+                {{#str}}managemodels, block_studentperformancepredictor{{/str}}
+            </a>
+            <a href="{{managedatasetsurl}}" class="btn btn-secondary">
+                {{#str}}managedatasets, block_studentperformancepredictor{{/str}}
+            </a>
+            <a href="{{refreshpredictionsurl}}" class="btn btn-secondary">
+                {{#str}}refreshpredictions, block_studentperformancepredictor{{/str}}
+            </a>
+        </div>
+    </div>
+
+    {{^hasmodel}}
+        <div class="alert alert-warning" role="alert">
+            {{{nomodeltext}}}
+        </div>
+    {{/hasmodel}}
+
+    {{#hasmodel}}
+        <section class="spp-course-overview">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="spp-stats">
+                        <div class="spp-stat-total">
+                            <span class="spp-label">{{#str}}totalstudents, block_studentperformancepredictor{{/str}}</span>
+                            <span class="spp-value">{{totalstudents}}</span>
+                        </div>
+                        <div class="spp-risk-distribution">
+                            <div class="spp-risk-high">
+                                <span class="spp-label">{{#str}}highrisk_label, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{highrisk}} ({{highriskpercent}}%)</span>
+                            </div>
+                            <div class="spp-risk-medium">
+                                <span class="spp-label">{{#str}}mediumrisk_label, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{mediumrisk}} ({{mediumriskpercent}}%)</span>
+                            </div>
+                            <div class="spp-risk-low">
+                                <span class="spp-label">{{#str}}lowrisk_label, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{lowrisk}} ({{lowriskpercent}}%)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {{#haschart}}
+                <div class="col-md-6">
+                    <div class="spp-chart-container" aria-label="{{#str}}riskdistribution, block_studentperformancepredictor{{/str}}">
+                        <canvas id="spp-admin-chart" data-chartdata="{{chartdata}}"></canvas>
+                        <noscript>
+                            <div class="alert alert-info mt-2">{{#str}}jsrequired, block_studentperformancepredictor{{/str}}</div>
+                        </noscript>
+                    </div>
+                </div>
+                {{/haschart}}
+            </div>
+        </section>
+    {{/hasmodel}}
+</section>

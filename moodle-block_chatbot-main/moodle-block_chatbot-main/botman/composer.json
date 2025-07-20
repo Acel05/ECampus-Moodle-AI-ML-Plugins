@@ -1,0 +1,15 @@
+{
+    "require": {
+        "botman/botman": "^2.6",
+        "botman/driver-web": "^1.5",
+        "symfony/cache": "^5.4",
+        "symfony/http-foundation": "^5.4"
+    },
+    "config": {
+        "platform": {
+            "php": "7.4"
+        },
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}
