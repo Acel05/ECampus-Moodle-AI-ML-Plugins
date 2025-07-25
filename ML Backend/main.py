@@ -21,6 +21,7 @@ import os
 import uuid
 import json
 import logging
+import traceback
 from datetime import datetime
 from typing import Dict, List, Optional, Union, Any
 
@@ -32,6 +33,9 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
 
 # Load environment variables from .env file
 load_dotenv()
@@ -102,7 +106,7 @@ class TrainResponse(BaseModel):
 
 class PredictRequest(BaseModel):
     model_id: str
-    features: List[float]
+    features: Dict[str, Any]  # Changed to dictionary with feature names as keys
 
 class PredictResponse(BaseModel):
     prediction: int
@@ -191,9 +195,20 @@ async def train_model(request: TrainRequest):
         # Keep track of feature names
         feature_names = X.columns.tolist()
 
-        # Handle categorical features
-        categorical_columns = X.select_dtypes(include=['object']).columns
-        X = pd.get_dummies(X, columns=categorical_columns, drop_first=True)
+        # Identify numerical and categorical columns
+        numerical_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
+        categorical_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
+
+        logger.info(f"Numerical columns: {numerical_cols}")
+        logger.info(f"Categorical columns: {categorical_cols}")
+
+        # Create preprocessing pipeline
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', StandardScaler(), numerical_cols),
+                ('cat', OneHotEncoder(drop='first', sparse=False, handle_unknown='ignore'), categorical_cols)
+            ]
+        )
 
         # Split data into training and testing sets
         from sklearn.model_selection import train_test_split
@@ -201,37 +216,38 @@ async def train_model(request: TrainRequest):
             X, y, test_size=request.test_size, random_state=42
         )
 
-        # Choose and train the model
+        # Choose the model
         model = None
         if request.algorithm == 'randomforest':
             from sklearn.ensemble import RandomForestClassifier
-            model = RandomForestClassifier(
+            clf = RandomForestClassifier(
                 n_estimators=request.model_params.get('n_estimators', 100),
                 random_state=42
             )
         elif request.algorithm == 'logisticregression':
             from sklearn.linear_model import LogisticRegression
-            model = LogisticRegression(
+            clf = LogisticRegression(
                 C=request.model_params.get('C', 1.0),
                 random_state=42,
-                max_iter=1000  # Increase max iterations for convergence
+                max_iter=1000,  # Increase max iterations for convergence
+                multi_class='auto'  # Handle both binary and multi-class
             )
         elif request.algorithm == 'svm':
             from sklearn.svm import SVC
-            model = SVC(
+            clf = SVC(
                 C=request.model_params.get('C', 1.0),
                 probability=True,
                 random_state=42
             )
         elif request.algorithm == 'decisiontree':
             from sklearn.tree import DecisionTreeClassifier
-            model = DecisionTreeClassifier(
+            clf = DecisionTreeClassifier(
                 max_depth=request.model_params.get('max_depth', None),
                 random_state=42
             )
         elif request.algorithm == 'knn':
             from sklearn.neighbors import KNeighborsClassifier
-            model = KNeighborsClassifier(
+            clf = KNeighborsClassifier(
                 n_neighbors=request.model_params.get('n_neighbors', 5)
             )
         else:
@@ -240,18 +256,42 @@ async def train_model(request: TrainRequest):
                 detail=f"Unsupported algorithm: {request.algorithm}"
             )
 
-        # Train the model
-        model.fit(X_train, y_train)
+        # Create and train the full pipeline
+        pipeline = Pipeline([
+            ('preprocessor', preprocessor),
+            ('classifier', clf)
+        ])
+
+        pipeline.fit(X_train, y_train)
 
         # Evaluate the model
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-        y_pred = model.predict(X_test)
-        metrics = {
-            "accuracy": float(accuracy_score(y_test, y_pred)),
-            "precision": float(precision_score(y_test, y_pred, zero_division=0)),
-            "recall": float(recall_score(y_test, y_pred, zero_division=0)),
-            "f1": float(f1_score(y_test, y_pred, zero_division=0))
-        }
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report
+        y_pred = pipeline.predict(X_test)
+
+        # Determine if binary or multiclass
+        unique_classes = np.unique(y)
+        is_binary = len(unique_classes) == 2
+
+        # Calculate metrics based on problem type
+        if is_binary:
+            metrics = {
+                "accuracy": float(accuracy_score(y_test, y_pred)),
+                "precision": float(precision_score(y_test, y_pred, zero_division=0)),
+                "recall": float(recall_score(y_test, y_pred, zero_division=0)),
+                "f1": float(f1_score(y_test, y_pred, zero_division=0))
+            }
+        else:
+            # For multiclass, use weighted averages
+            metrics = {
+                "accuracy": float(accuracy_score(y_test, y_pred)),
+                "precision": float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
+                "recall": float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
+                "f1": float(f1_score(y_test, y_pred, average='weighted', zero_division=0))
+            }
+
+        # Get detailed classification report for logging
+        report = classification_report(y_test, y_pred)
+        logger.info(f"Classification Report:\n{report}")
 
         # Generate a unique model ID
         model_id = str(uuid.uuid4())
@@ -263,18 +303,23 @@ async def train_model(request: TrainRequest):
         # Save the model with feature names
         model_filename = f"{model_id}.joblib"
         model_path = os.path.join(course_models_dir, model_filename)
-        joblib.dump({
-            'model': model,
+
+        # Save the model with relevant metadata
+        model_data = {
+            'pipeline': pipeline,
             'feature_names': feature_names,
+            'numerical_cols': numerical_cols,
+            'categorical_cols': categorical_cols, 
             'algorithm': request.algorithm,
-            'trained_at': datetime.now().isoformat()
-        }, model_path)
+            'trained_at': datetime.now().isoformat(),
+            'target_classes': list(pipeline.classes_),
+            'metrics': metrics
+        }
+
+        joblib.dump(model_data, model_path)
 
         # Add to cache
-        MODEL_CACHE[model_id] = {
-            'model': model,
-            'feature_names': feature_names
-        }
+        MODEL_CACHE[model_id] = model_data
 
         logger.info(f"Model {model_id} trained successfully with accuracy {metrics['accuracy']}")
 
@@ -301,7 +346,7 @@ async def predict(request: PredictRequest):
     """
     Make a prediction using a trained model.
 
-    Requires a model_id and feature values matching the model's expected features.
+    Requires a model_id and feature values as a dictionary with feature names as keys.
     """
     logger.info(f"Prediction request received for model {request.model_id}")
 
@@ -317,11 +362,7 @@ async def predict(request: PredictRequest):
                 for file in files:
                     if file == f"{request.model_id}.joblib":
                         model_path = os.path.join(root, file)
-                        model_dict = joblib.load(model_path)
-                        model_data = {
-                            'model': model_dict['model'],
-                            'feature_names': model_dict['feature_names']
-                        }
+                        model_data = joblib.load(model_path)
                         MODEL_CACHE[request.model_id] = model_data
                         found = True
                         break
@@ -334,38 +375,35 @@ async def predict(request: PredictRequest):
                     detail=f"Model with ID {request.model_id} not found"
                 )
 
-        # Get the model and feature names
-        model = model_data['model']
+        # Get the pipeline and feature names
+        pipeline = model_data['pipeline']
         feature_names = model_data['feature_names']
 
-        # Check if number of features matches
-        if len(request.features) != len(feature_names):
-            logger.warning(f"Feature count mismatch: expected {len(feature_names)}, got {len(request.features)}")
+        # Create a DataFrame from the input features
+        try:
+            input_df = pd.DataFrame([request.features])
 
-            # Handle fewer features by padding with zeros
-            if len(request.features) < len(feature_names):
-                logger.info("Padding features with zeros")
-                features = request.features + [0] * (len(feature_names) - len(request.features))
-            else:
-                # Truncate extra features
-                logger.info("Truncating extra features")
-                features = request.features[:len(feature_names)]
-        else:
-            features = request.features
+            # Check for missing features and add them with default values
+            for feat in feature_names:
+                if feat not in input_df.columns:
+                    logger.warning(f"Missing feature '{feat}' in input, setting to 0")
+                    input_df[feat] = 0
 
-        # Convert to numpy array
-        features_array = np.array(features).reshape(1, -1)
+            # Ensure the DataFrame has all required columns in the right order
+            input_df = input_df[feature_names]
+
+        except Exception as e:
+            logger.error(f"Error creating input DataFrame: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid feature format. Error: {str(e)}"
+            )
 
         # Make prediction
-        prediction = int(model.predict(features_array)[0])
+        prediction = int(pipeline.predict(input_df)[0])
 
-        # Get probabilities (if available)
-        probabilities = []
-        if hasattr(model, 'predict_proba'):
-            probabilities = model.predict_proba(features_array)[0].tolist()
-        else:
-            # If no probabilities available, create binary probabilities
-            probabilities = [1-prediction, prediction] if prediction in [0, 1] else [0, 0]
+        # Get probabilities
+        probabilities = pipeline.predict_proba(input_df)[0].tolist()
 
         logger.info(f"Prediction: {prediction}, Probabilities: {probabilities}")
 
@@ -404,7 +442,8 @@ async def list_models(course_id: int):
                             "model_id": model_id,
                             "algorithm": model_data.get('algorithm', 'unknown'),
                             "feature_names": model_data.get('feature_names', []),
-                            "trained_at": model_data.get('trained_at', '')
+                            "trained_at": model_data.get('trained_at', ''),
+                            "metrics": model_data.get('metrics', {})
                         })
                     except Exception as e:
                         logger.warning(f"Error loading model {model_id}: {str(e)}")
