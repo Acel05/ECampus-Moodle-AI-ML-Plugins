@@ -1347,10 +1347,9 @@ if __name__ == "__main__":
     import uvicorn
     import platform
 
-    host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8000))  # Ambil PORT dari Railway
 
     print(f"Starting Student Performance Prediction API on {host}:{port}")
     print(f"Python version: {platform.python_version()}")
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port)
