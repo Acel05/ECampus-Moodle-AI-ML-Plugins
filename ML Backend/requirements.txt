@@ -1,4 +1,5 @@
-fastapi==0.100.0
+fastapi
+hypercorn
 fastapi
 uvicorn
 scikit-learn
