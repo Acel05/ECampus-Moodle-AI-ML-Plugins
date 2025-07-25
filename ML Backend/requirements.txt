@@ -1,5 +1,4 @@
 fastapi
-hypercorn
 fastapi
 uvicorn
 scikit-learn
