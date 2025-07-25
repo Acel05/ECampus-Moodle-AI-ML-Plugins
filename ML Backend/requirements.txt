@@ -1,7 +1,36 @@
-fastapi
-fastapi
-uvicorn
-scikit-learn
-pandas
-joblib
-python-dotenv
+# Core web framework
+fastapi>=0.95.0
+uvicorn>=0.22.0
+pydantic>=1.10.7
+
+# ASGI server alternatives (in case uvicorn gives issues)
+hypercorn>=0.14.3
+gunicorn>=20.1.0
+
+# Data processing
+numpy>=1.24.3
+pandas>=2.0.1
+scipy>=1.10.1
+
+# Machine learning
+scikit-learn>=1.2.2
+joblib>=1.2.0
+
+# Visualization (for reports)
+matplotlib>=3.7.1
+
+# Utilities
+python-dotenv>=1.0.0
+python-multipart>=0.0.6
+httpx>=0.24.0
+
+# Optional: for SHAP explanations
+shap>=0.41.0
+
+# Optional: for more advanced ML capabilities
+xgboost>=1.7.5
+lightgbm>=3.3.5
+optuna>=3.1.1  # For hyperparameter optimization
+
+# For production deployment
+httptools>=0.5.0
