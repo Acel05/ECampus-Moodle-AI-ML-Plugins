@@ -118,4 +118,22 @@ if ($ADMIN->fulltree) {
         get_string('enabledebug', 'block_studentperformancepredictor', '', true),
         get_string('enabledebug_desc', 'block_studentperformancepredictor', '', true),
         0));
+    
+    // Add a button to test the backend connection
+    $testbackendurl = new moodle_url('/blocks/studentperformancepredictor/admin/testbackend.php');
+    $settings->add(new admin_setting_description(
+        'block_studentperformancepredictor/testbackend',
+        get_string('testbackend', 'block_studentperformancepredictor', '', true),
+        html_writer::link($testbackendurl, get_string('testbackendbutton', 'block_studentperformancepredictor'), 
+            ['class' => 'btn btn-secondary', 'target' => '_blank'])
+    ));
+    
+    // Add a button to the debug tool
+    $debugtoolurl = new moodle_url('/blocks/studentperformancepredictor/admin/debug_tool.php');
+    $settings->add(new admin_setting_description(
+        'block_studentperformancepredictor/debugtool',
+        get_string('debugtool', 'block_studentperformancepredictor', '', true),
+        html_writer::link($debugtoolurl, get_string('debugtoolbutton', 'block_studentperformancepredictor'), 
+            ['class' => 'btn btn-warning', 'target' => '_blank'])
+    ));
 }
