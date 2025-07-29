@@ -14,17 +14,4 @@ $tasks = [
         'dayofweek' => '*',
         'disabled' => 0,
     ],
-
-    // Make sure we have the adhoc task registered
-    [
-        'classname' => 'block_studentperformancepredictor\task\adhoc_train_model',
-        'blocking' => 0,
-        'minute' => '*',
-        'hour' => '*',
-        'day' => '*',
-        'month' => '*',
-        'dayofweek' => '*',
-        'disabled' => 0,
-        'adhoc' => true
-    ],
 ];
