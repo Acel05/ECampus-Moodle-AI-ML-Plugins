@@ -350,6 +350,11 @@ function block_studentperformancepredictor_call_backend_api($endpoint, $data) {
         $apiurl = 'http://localhost:5000';
     }
 
+    // If using Railway, ensure the URL is correct
+    if (strpos($apiurl, 'railway.app') !== false && strpos($apiurl, 'http') === false) {
+        $apiurl = 'https://' . $apiurl;
+    }
+
     // Ensure URL ends with the endpoint
     if ($endpoint[0] == '/') {
         $endpoint = substr($endpoint, 1);
@@ -393,6 +398,20 @@ function block_studentperformancepredictor_call_backend_api($endpoint, $data) {
             if ($debug) {
                 debugging('Backend API error: HTTP ' . $httpcode . ' - ' . $response, DEBUG_DEVELOPER);
             }
+
+            // Try to extract error details from response
+            $error_details = '';
+            try {
+                $json_response = json_decode($response, true);
+                if (isset($json_response['detail'])) {
+                    $error_details = $json_response['detail'];
+                }
+            } catch (\Exception $e) {
+                // Just use the raw response if JSON parsing fails
+                $error_details = $response;
+            }
+
+            error_log("Backend API error: HTTP $httpcode - $error_details");
             return false;
         }
 
@@ -401,6 +420,7 @@ function block_studentperformancepredictor_call_backend_api($endpoint, $data) {
             if ($debug) {
                 debugging('Invalid response format from backend: ' . substr($response, 0, 200), DEBUG_DEVELOPER);
             }
+            error_log("Invalid backend response format: " . substr($response, 0, 200));
             return false;
         }
 
@@ -409,6 +429,7 @@ function block_studentperformancepredictor_call_backend_api($endpoint, $data) {
         if ($debug) {
             debugging('Backend API error: ' . $e->getMessage(), DEBUG_DEVELOPER);
         }
+        error_log("Backend API exception: " . $e->getMessage());
         return false;
     }
 }
