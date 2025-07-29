@@ -381,17 +381,37 @@ function block_studentperformancepredictor_call_backend_api($endpoint, $data) {
     ];
 
     $debug = get_config('block_studentperformancepredictor', 'enabledebug');
+
+    // Log request
+    error_log("[SPP] API Request to: $apiurl");
+    error_log("[SPP] API Data: " . json_encode($data));
+
     if ($debug) {
         debugging('Calling backend API: ' . $apiurl . ' with data: ' . json_encode($data), DEBUG_DEVELOPER);
     }
 
     try {
+        $start_time = microtime(true);
+
+        // Make the request
         $response = $curl->post($apiurl, json_encode($data), $options);
+
+        $end_time = microtime(true);
+        $duration = round($end_time - $start_time, 2);
+
         $httpcode = $curl->get_info()['http_code'] ?? 0;
+
+        error_log("[SPP] API Response time: {$duration}s, Status code: $httpcode");
 
         if ($debug) {
             debugging('Backend API response code: ' . $httpcode, DEBUG_DEVELOPER);
-            debugging('Backend API response: ' . substr($response, 0, 1000) . (strlen($response) > 1000 ? '...' : ''), DEBUG_DEVELOPER);
+            debugging('Backend API response time: ' . $duration . 's', DEBUG_DEVELOPER);
+
+            // Log a truncated response for debugging
+            $log_response = (strlen($response) > 1000) 
+                ? substr($response, 0, 1000) . '...' 
+                : $response;
+            debugging('Backend API response: ' . $log_response, DEBUG_DEVELOPER);
         }
 
         if ($httpcode !== 200) {
@@ -411,7 +431,7 @@ function block_studentperformancepredictor_call_backend_api($endpoint, $data) {
                 $error_details = $response;
             }
 
-            error_log("Backend API error: HTTP $httpcode - $error_details");
+            error_log("[SPP] Backend API error: HTTP $httpcode - $error_details");
             return false;
         }
 
@@ -420,16 +440,20 @@ function block_studentperformancepredictor_call_backend_api($endpoint, $data) {
             if ($debug) {
                 debugging('Invalid response format from backend: ' . substr($response, 0, 200), DEBUG_DEVELOPER);
             }
-            error_log("Invalid backend response format: " . substr($response, 0, 200));
+            error_log("[SPP] Invalid backend response format: " . substr($response, 0, 200));
             return false;
         }
+
+        // Log successful response
+        error_log("[SPP] API call successful, response contains " . count($responseData) . " elements");
 
         return $responseData;
     } catch (\Exception $e) {
         if ($debug) {
             debugging('Backend API error: ' . $e->getMessage(), DEBUG_DEVELOPER);
         }
-        error_log("Backend API exception: " . $e->getMessage());
+        error_log("[SPP] Backend API exception: " . $e->getMessage());
+        error_log("[SPP] " . $e->getTraceAsString());
         return false;
     }
 }
