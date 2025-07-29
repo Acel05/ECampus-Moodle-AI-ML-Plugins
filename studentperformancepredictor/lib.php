@@ -468,7 +468,7 @@ function block_studentperformancepredictor_handle_api_error($error, $endpoint, $
  * @return int|bool Model ID or false on failure
  */
 function block_studentperformancepredictor_train_model_via_backend($courseid, $datasetid, $algorithm = null) {
-    global $DB, $USER;
+    global $DB, $USER, $CFG;
 
     try {
         // Get dataset information
@@ -476,6 +476,12 @@ function block_studentperformancepredictor_train_model_via_backend($courseid, $d
 
         // Normalize file path for backend
         $dataset_filepath = str_replace('\\', '/', $dataset->filepath);
+
+        // Bitnami path adjustments for mounted volumes
+        if (strpos($dataset_filepath, '/bitnami/moodle') !== false) {
+            // Convert Bitnami path to container path
+            $dataset_filepath = str_replace('/bitnami/moodle', $CFG->dirroot, $dataset_filepath);
+        }
 
         // Prepare request payload
         $payload = [
@@ -494,8 +500,8 @@ function block_studentperformancepredictor_train_model_via_backend($courseid, $d
         $response = block_studentperformancepredictor_call_backend_api('train', $payload);
 
         if (!$response || !isset($response['model_id'])) {
-            throw new \moodle_exception('trainingfailed', 'block_studentperformancepredictor', '', 
-                                        'Invalid response from backend');
+            $error_msg = isset($response['detail']) ? $response['detail'] : 'Invalid response from backend';
+            throw new \moodle_exception('trainingfailed', 'block_studentperformancepredictor', '', $error_msg);
         }
 
         // Create a record in the database
@@ -517,16 +523,31 @@ function block_studentperformancepredictor_train_model_via_backend($courseid, $d
 
         $model_db_id = $DB->insert_record('block_spp_models', $model);
 
+        if ($debug) {
+            debugging("Model training completed successfully. Model ID: {$model_db_id}", DEBUG_DEVELOPER);
+        }
+
         return $model_db_id;
 
     } catch (\Exception $e) {
-        debugging('Error training model: ' . $e->getMessage(), DEBUG_DEVELOPER);
+        debugging('Error training model: ' . $e->getMessage() . "\n" . $e->getTraceAsString(), DEBUG_DEVELOPER);
 
-        // If we have model info but there was an error, mark it as failed
-        if (isset($model) && isset($model_db_id)) {
-            $model->trainstatus = 'failed';
-            $model->errormessage = $e->getMessage();
-            $DB->update_record('block_spp_models', $model);
+        // If we have a model info in the DB but training failed, mark it as failed
+        if (isset($payload) && isset($courseid) && isset($datasetid)) {
+            // Look for pending model
+            $pending_model = $DB->get_record('block_spp_models', [
+                'courseid' => $courseid,
+                'datasetid' => $datasetid,
+                'trainstatus' => 'pending'
+            ], '*', IGNORE_MULTIPLE);
+
+            if ($pending_model) {
+                $pending_model->trainstatus = 'failed';
+                $pending_model->errormessage = $e->getMessage();
+                $pending_model->timemodified = time();
+                $DB->update_record('block_spp_models', $pending_model);
+                debugging("Updated model {$pending_model->id} status to failed", DEBUG_DEVELOPER);
+            }
         }
 
         return false;
