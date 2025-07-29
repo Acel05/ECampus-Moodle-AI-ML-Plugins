@@ -38,6 +38,11 @@ if ($courseid == 0) {
         redirect(new moodle_url('/blocks/studentperformancepredictor/admin/trainglobalmodel.php'));
     }
 
+    // Set up page title for global model
+    $PAGE->set_title(get_string('trainglobalmodel', 'block_studentperformancepredictor'));
+    $PAGE->set_heading(get_string('trainglobalmodel', 'block_studentperformancepredictor'));
+    $PAGE->set_pagelayout('admin');
+
     // Verify dataset exists (for global model it can be from any course)
     if (!$DB->record_exists('block_spp_datasets', array('id' => $datasetid))) {
         \core\notification::add(
@@ -52,6 +57,11 @@ if ($courseid == 0) {
     $coursecontext = context_course::instance($courseid);
     require_capability('block/studentperformancepredictor:managemodels', $coursecontext);
 
+    // Set up page title
+    $PAGE->set_title($course->shortname . ': ' . get_string('training_model', 'block_studentperformancepredictor'));
+    $PAGE->set_heading($course->fullname);
+    $PAGE->set_context($coursecontext);
+
     // Verify dataset exists and belongs to the course
     if (!$DB->record_exists('block_spp_datasets', array('id' => $datasetid, 'courseid' => $courseid))) {
         \core\notification::add(
@@ -62,8 +72,12 @@ if ($courseid == 0) {
     }
 }
 
-// Check for pending training - this might be stopping new tasks
+// First clean up any stuck models
+$fixed = block_studentperformancepredictor_cleanup_pending_models($courseid);
+
+// Check for pending training
 if (training_manager::has_pending_training($courseid)) {
+    // If we couldn't fix any models, there's a real pending task
     \core\notification::add(
         get_string('training_already_scheduled', 'block_studentperformancepredictor'),
         \core\notification::WARNING
@@ -75,67 +89,6 @@ if (training_manager::has_pending_training($courseid)) {
     }
 }
 
-// Add debugging information directly to the page output for testing
-$PAGE->set_title('Training Model');
-$PAGE->set_heading('Training Model');
-echo $OUTPUT->header();
-echo "<h3>Model Training Debug Information</h3>";
-echo "<p>Attempting to schedule training task for course $courseid with dataset $datasetid using algorithm $algorithm</p>";
-
-// Enable error reporting
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-
-// Schedule training with detailed logging
-try {
-    echo "<p>Calling training_manager::schedule_training()...</p>";
-    $result = training_manager::schedule_training($courseid, $datasetid, $algorithm);
-
-    if ($result) {
-        echo "<div class='alert alert-success'>Task scheduled successfully</div>";
-
-        // Look for the queued task
-        global $DB;
-        $tasks = $DB->get_records_sql(
-            "SELECT * FROM {task_adhoc} 
-             WHERE classname = '\\\\block_studentperformancepredictor\\\\task\\\\adhoc_train_model' 
-             ORDER BY id DESC LIMIT 1"
-        );
-
-        if (!empty($tasks)) {
-            echo "<p>Found newly created task:</p>";
-            foreach ($tasks as $task) {
-                echo "<pre>".print_r(json_decode($task->customdata), true)."</pre>";
-            }
-        } else {
-            echo "<div class='alert alert-warning'>No tasks found in the database!</div>";
-        }
-
-        \core\notification::success(get_string('model_training_queued_backend', 'block_studentperformancepredictor'));
-    } else {
-        echo "<div class='alert alert-danger'>Task scheduling failed</div>";
-        throw new \moodle_exception('trainingschedulefailed', 'block_studentperformancepredictor');
-    }
-} catch (\Exception $e) {
-    echo "<div class='alert alert-danger'>Exception: ".$e->getMessage()."</div>";
-    echo "<pre>".$e->getTraceAsString()."</pre>";
-    \core\notification::error($e->getMessage());
-}
-
-// Add a return button
-echo '<div class="mt-3">';
-if ($courseid == 0) {
-    echo '<a href="' . new moodle_url('/blocks/studentperformancepredictor/admin/trainglobalmodel.php') . '" class="btn btn-primary">Return to global models</a>';
-} else {
-    echo '<a href="' . new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', array('courseid' => $courseid)) . '" class="btn btn-primary">Return to models</a>';
-}
-echo '</div>';
-
-echo $OUTPUT->footer();
-// Stop execution here to show debug information
-exit;
-
-// Normal code flow continues if debugging is disabled
 // Schedule training (backend-driven orchestration)
 try {
     // This will queue a training task that calls the Python backend /train endpoint
