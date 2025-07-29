@@ -24,8 +24,8 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2025063004;        // The current plugin version (Date: YYYYMMDDXX).
+$plugin->version   = 2025063005;        // The current plugin version (Date: YYYYMMDDXX).
 $plugin->requires  = 2022112800;        // Requires Moodle 4.1 or later.
 $plugin->component = 'block_studentperformancepredictor'; // Full name of the plugin.
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.1.0';           // Updated for global model support
+$plugin->release   = '1.1.1';           // Updated for task system fixes
