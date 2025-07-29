@@ -9,7 +9,6 @@ defined('MOODLE_INTERNAL') || die();
  * Ad-hoc task to train a new model on demand.
  */
 class adhoc_train_model extends \core\task\adhoc_task {
-
     /**
      * Return the name of this task.
      * 
