@@ -1,0 +1,48 @@
+{{!
+    This file is part of Moodle - http://moodle.org/
+ 
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+ 
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+ 
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+}}
+{{!
+    @template block_chatbot/chatbot
+ 
+    Template for the chatbot interface.
+}}
+ 
+<div id="chatbot-container">
+    <button id="chatbot-toggle-btn" aria-label="{{chattoggle}}" style="background-color: {{buttoncolor}}">
+        <img src="{{wwwroot}}/blocks/chatbot/images/bot_img.jpg" alt="Chat Bot" width="40" height="40">
+    </button>
+ 
+    <div id="chatbot-window" class="chatbot-hidden">
+        <div class="chatbot-header" style="background-color: {{headercolor}}">
+            <div class="chatbot-title">{{chatbot}}</div>
+            <button id="chatbot-close-btn" aria-label="{{chatclose}}">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
+        <div class="chatbot-body">
+            <div id="chatbot-messages"></div>
+            <div id="chatbot-input-area">
+                <textarea id="chatbot-message-input" placeholder="{{writeamessage}}" rows="1"></textarea>
+                <button id="chatbot-send-button">
+                    <img src="{{wwwroot}}/blocks/chatbot/images/send.png" alt="Send" width="24" height="24">
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

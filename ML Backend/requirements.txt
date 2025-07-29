@@ -1,0 +1,30 @@
+# Core web framework
+fastapi>=0.104.1
+uvicorn>=0.24.0
+pydantic>=2.4.2
+
+# ASGI server alternatives
+hypercorn>=0.14.4
+gunicorn>=21.2.0
+
+# Data processing
+numpy>=1.26.1
+pandas>=2.1.2
+scipy>=1.11.3
+
+# Machine learning
+scikit-learn>=1.3.2
+joblib>=1.3.2
+
+# Utilities
+python-dotenv>=1.0.0
+python-multipart>=0.0.6
+httpx>=0.25.1
+
+# Extra data formats
+openpyxl>=3.1.2  # For Excel support
+xlrd>=2.0.1      # For older Excel formats
+
+# Production extras for Railway
+uvloop>=0.18.0
+httptools>=0.6.1

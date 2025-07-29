@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="blocks/studentperformancepredictor/db" VERSION="20231128" COMMENT="XMLDB file for Moodle blocks/studentperformancepredictor">
+    <TABLES>
+        <TABLE NAME="block_spp_models" COMMENT="Stores metadata for trained prediction models">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Course ID the model is for"/>
+                <FIELD NAME="datasetid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Dataset ID used to train the model"/>
+                <FIELD NAME="modelname" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Name of the model"/>
+                <FIELD NAME="modeldata" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Serialized model data (optional, as backend may store models elsewhere)"/>
+                <FIELD NAME="modelid" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false" COMMENT="External model ID for the backend"/>
+                <FIELD NAME="modelpath" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false" COMMENT="Path to the model file (optional)"/>
+                <FIELD NAME="featureslist" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="List of features used in the model"/>
+                <FIELD NAME="algorithmtype" TYPE="char" LENGTH="50" NOTNULL="true" DEFAULT="randomforest" SEQUENCE="false" COMMENT="Type of algorithm used"/>
+                <FIELD NAME="accuracy" TYPE="number" LENGTH="10" NOTNULL="false" DECIMALS="5" DEFAULT="0" SEQUENCE="false" COMMENT="Model accuracy on validation data"/>
+                <FIELD NAME="metrics" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Additional metrics in JSON format"/>
+                <FIELD NAME="active" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether this model is currently active"/>
+                <FIELD NAME="trainstatus" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="pending" SEQUENCE="false" COMMENT="Status of model training (pending, training, complete, failed)"/>
+                <FIELD NAME="errormessage" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Error message if model training failed"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+                <KEY NAME="usermodified" TYPE="foreign" FIELDS="usermodified" REFTABLE="user" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="courseid_active" UNIQUE="false" FIELDS="courseid, active"/>
+                <INDEX NAME="trainstatus" UNIQUE="false" FIELDS="trainstatus"/>
+            </INDEXES>
+        </TABLE>
+
+        <TABLE NAME="block_spp_predictions" COMMENT="Stores predictions for individual students">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="modelid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Model used for prediction"/>
+                <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="passprob" TYPE="number" LENGTH="10" NOTNULL="true" DECIMALS="5" DEFAULT="0" SEQUENCE="false" COMMENT="Probability of passing"/>
+                <FIELD NAME="riskvalue" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Risk level (1=low, 2=medium, 3=high)"/>
+                <FIELD NAME="predictiondata" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Additional prediction details in JSON format"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="modelid" TYPE="foreign" FIELDS="modelid" REFTABLE="block_spp_models" REFFIELDS="id"/>
+                <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+                <KEY NAME="userid" TYPE="foreign" FIELDS="userid" REFTABLE="user" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="courseid_userid" UNIQUE="false" FIELDS="courseid, userid"/>
+                <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+                <INDEX NAME="riskvalue" UNIQUE="false" FIELDS="riskvalue"/>
+                <INDEX NAME="timemodified" UNIQUE="false" FIELDS="timemodified"/>
+            </INDEXES>
+        </TABLE>
+
+        <TABLE NAME="block_spp_suggestions" COMMENT="Stores suggested activities for students">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="predictionid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="cmid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Course module ID being suggested"/>
+                <FIELD NAME="resourcetype" TYPE="char" LENGTH="50" NOTNULL="true" SEQUENCE="false" COMMENT="Type of resource being suggested"/>
+                <FIELD NAME="resourceid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Resource ID being suggested"/>
+                <FIELD NAME="priority" TYPE="int" LENGTH="3" NOTNULL="true" DEFAULT="5" SEQUENCE="false" COMMENT="Priority of suggestion (1-10)"/>
+                <FIELD NAME="reason" TYPE="text" NOTNULL="true" SEQUENCE="false" COMMENT="Reason for the suggestion"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="viewed" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether the suggestion has been viewed"/>
+                <FIELD NAME="completed" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether the suggestion has been completed"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="predictionid" TYPE="foreign" FIELDS="predictionid" REFTABLE="block_spp_predictions" REFFIELDS="id"/>
+                <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+                <KEY NAME="userid" TYPE="foreign" FIELDS="userid" REFTABLE="user" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="userid_priority" UNIQUE="false" FIELDS="userid, priority"/>
+                <INDEX NAME="userid_viewed" UNIQUE="false" FIELDS="userid, viewed"/>
+                <INDEX NAME="userid_completed" UNIQUE="false" FIELDS="userid, completed"/>
+            </INDEXES>
+        </TABLE>
+
+        <TABLE NAME="block_spp_datasets" COMMENT="Stores training datasets">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="description" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+                <FIELD NAME="filepath" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Path to the dataset file"/>
+                <FIELD NAME="fileformat" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="Format of the dataset file (CSV, JSON, etc.)"/>
+                <FIELD NAME="columns" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Description of dataset columns in JSON format"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+                <KEY NAME="usermodified" TYPE="foreign" FIELDS="usermodified" REFTABLE="user" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="fileformat" UNIQUE="false" FIELDS="fileformat"/>
+            </INDEXES>
+        </TABLE>
+
+        <TABLE NAME="block_spp_training_log" COMMENT="Stores logs of model training events">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="modelid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="event" TYPE="char" LENGTH="50" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="message" TYPE="text" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="level" TYPE="char" LENGTH="10" NOTNULL="true" DEFAULT="info" SEQUENCE="false"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="modelid" TYPE="foreign" FIELDS="modelid" REFTABLE="block_spp_models" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="event_idx" UNIQUE="false" FIELDS="event"/>
+                <INDEX NAME="level_idx" UNIQUE="false" FIELDS="level"/>
+            </INDEXES>
+        </TABLE>
+    </TABLES>
+</XMLDB>

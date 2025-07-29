@@ -1,0 +1,207 @@
+{{!
+    This file is part of Moodle - http://moodle.org/
+
+    Moodle is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Moodle is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+}}
+{{!
+    @template block_studentperformancepredictor/student_dashboard
+
+    Student dashboard template
+
+    Context variables required for this template:
+    * heading - Block heading
+    * courseid - Course ID for AJAX calls
+    * userid - User ID for AJAX calls
+    * hasmodel - Whether there is an active model
+    * nomodeltext - Text to display when there is no model
+    * hasprediction - Whether there is a prediction
+    * nopredictiontext - Text to display when there is no prediction
+    * can_generate_prediction - Whether student can generate a prediction
+    * generate_prediction_url - URL to generate a prediction
+    * passprob - Pass probability percentage
+    * riskvalue - Risk level (1-3)
+    * risktext - Risk level text
+    * riskclass - Risk level CSS class
+    * lastupdate - Last update timestamp
+    * hassuggestions - Whether there are suggestions
+    * suggestions - Array of suggestions
+    * haschart - Whether to show chart
+    * chartdata - Chart data in JSON format
+    * showcourseselector - Whether to show course selector
+    * courseselector - HTML for course selector
+    * showimprovements - Whether to show improvements
+    * has_historical - Whether there are historical predictions
+    * historical - Array of historical predictions
+}}
+
+<section class="block_studentperformancepredictor" data-course-id="{{courseid}}" data-user-id="{{userid}}" aria-label="{{heading}}">
+    <h4 class="spp-heading">{{heading}}</h4>
+
+    {{#showcourseselector}}
+        <div class="spp-course-selector-container mb-3">
+            {{{courseselector}}}
+        </div>
+    {{/showcourseselector}}
+
+    {{^hasmodel}}
+        <div class="alert alert-warning" role="alert">
+            {{{nomodeltext}}}
+        </div>
+    {{/hasmodel}}
+
+    {{#hasmodel}}
+        {{^hasprediction}}
+            <div class="alert alert-info" role="status">
+                {{{nopredictiontext}}}
+            </div>
+
+            {{#can_generate_prediction}}
+                <div class="text-center mb-3">
+                    <a href="{{generate_prediction_url}}" class="btn btn-primary spp-generate-prediction">
+                        {{#str}}generateprediction, block_studentperformancepredictor{{/str}}
+                    </a>
+                    <div class="spp-prediction-loading mt-2" style="display: none;">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status">
+                            <span class="sr-only">{{#str}}loading, core{{/str}}</span>
+                        </div>
+                        <span class="ml-2">{{#str}}generatingprediction, block_studentperformancepredictor{{/str}}</span>
+                    </div>
+                </div>
+            {{/can_generate_prediction}}
+        {{/hasprediction}}
+
+        {{#hasprediction}}
+            <section class="spp-prediction" data-prediction-id="{{predictionid}}">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="spp-prediction-stats">
+                            <div class="spp-probability">
+                                <span class="spp-label">{{#str}}passingchance, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{passprob}}%</span>
+                            </div>
+                            <div class="spp-risk {{riskclass}}">
+                                <span class="spp-label">{{#str}}risk, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{risktext}}</span>
+                            </div>
+                            <div class="spp-update-time">
+                                <small>{{#str}}lastupdate, block_studentperformancepredictor, {{lastupdate}}{{/str}}</small>
+                            </div>
+                            {{#isglobalmodel}}
+                                <div class="spp-model-type">
+                                    <small class="text-muted">{{#str}}usingcrosscoursemodel, block_studentperformancepredictor{{/str}}</small>
+                                </div>
+                            {{/isglobalmodel}}
+
+                            {{#can_generate_prediction}}
+                                <div class="mt-2">
+                                    <a href="{{generate_prediction_url}}" class="btn btn-sm btn-secondary spp-update-prediction">
+                                        {{#str}}updateprediction, block_studentperformancepredictor{{/str}}
+                                    </a>
+                                    <div class="spp-prediction-loading mt-2" style="display: none;">
+                                        <div class="spinner-border spinner-border-sm text-secondary" role="status">
+                                            <span class="sr-only">{{#str}}loading, core{{/str}}</span>
+                                        </div>
+                                        <span class="ml-2">{{#str}}updatingprediction, block_studentperformancepredictor{{/str}}</span>
+                                    </div>
+                                </div>
+                            {{/can_generate_prediction}}
+                        </div>
+                    </div>
+                    {{#haschart}}
+                    <div class="col-md-6">
+                        <div class="spp-chart-container" aria-label="{{#str}}passingchance, block_studentperformancepredictor{{/str}}">
+                            <canvas id="spp-prediction-chart" data-chartdata="{{chartdata}}" role="img" aria-label="{{#str}}riskdistributionchart, block_studentperformancepredictor{{/str}}"></canvas>
+                            <noscript>
+                                <div class="alert alert-info mt-2">{{#str}}jsrequired, block_studentperformancepredictor{{/str}}</div>
+                            </noscript>
+                        </div>
+                    </div>
+                    {{/haschart}}
+                </div>
+            </section>
+
+            {{#showimprovements}}
+                {{#has_historical}}
+                <section class="spp-improvements mt-3">
+                    <h5>{{#str}}performancehistory, block_studentperformancepredictor{{/str}}</h5>
+                    <div class="spp-improvements-chart">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>{{#str}}date, core{{/str}}</th>
+                                    <th>{{#str}}passingchance, block_studentperformancepredictor{{/str}}</th>
+                                    <th>{{#str}}risk, block_studentperformancepredictor{{/str}}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {{#historical}}
+                                <tr>
+                                    <td>{{date}}</td>
+                                    <td>{{passprob}}%</td>
+                                    <td><span class="{{riskclass}}">{{risktext}}</span></td>
+                                </tr>
+                                {{/historical}}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                {{/has_historical}}
+            {{/showimprovements}}
+
+            <section>
+            {{#hassuggestions}}
+                <div class="spp-suggestions">
+                    <h5>{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}</h5>
+                    <div class="list-group spp-suggestions-list" aria-label="{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}">
+                        {{#suggestions}}
+                            <div class="list-group-item spp-suggestion" data-id="{{id}}">
+                                <div class="spp-suggestion-content">
+                                    {{#hasurl}}
+                                        <h6><a href="{{url}}" target="_blank" rel="noopener noreferrer">{{name}}</a></h6>
+                                    {{/hasurl}}
+                                    {{^hasurl}}
+                                        <h6>{{name}}</h6>
+                                    {{/hasurl}}
+                                    <p>{{reason}}</p>
+                                    <div class="spp-suggestion-actions">
+                                        {{^viewed}}
+                                            <button class="btn btn-sm btn-outline-secondary spp-mark-viewed" data-id="{{id}}">
+                                                {{#str}}markasviewed, block_studentperformancepredictor{{/str}}
+                                            </button>
+                                        {{/viewed}}
+                                        {{#viewed}}
+                                            <span class="badge bg-secondary">{{#str}}viewed, block_studentperformancepredictor{{/str}}</span>
+                                        {{/viewed}}
+                                        {{^completed}}
+                                            <button class="btn btn-sm btn-outline-primary spp-mark-completed" data-id="{{id}}">
+                                                {{#str}}markascompleted, block_studentperformancepredictor{{/str}}
+                                            </button>
+                                        {{/completed}}
+                                        {{#completed}}
+                                            <span class="badge bg-success">{{#str}}completed, block_studentperformancepredictor{{/str}}</span>
+                                        {{/completed}}
+                                    </div>
+                                </div>
+                            </div>
+                        {{/suggestions}}
+                    </div>
+                </div>
+            {{/hassuggestions}}
+            {{^hassuggestions}}
+                <div class="alert alert-info mt-3">{{#str}}nosuggestions, block_studentperformancepredictor{{/str}}</div>
+            {{/hassuggestions}}
+            </section>
+        {{/hasprediction}}
+    {{/hasmodel}}
+</section>

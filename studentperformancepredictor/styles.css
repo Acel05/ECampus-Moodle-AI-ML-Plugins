@@ -1,0 +1,296 @@
+/* Main block styles */
+.block_studentperformancepredictor {
+    padding: 15px;
+}
+
+.block_studentperformancepredictor .spp-heading {
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+/* Accessibility: Focus styles for all interactive elements */
+.block_studentperformancepredictor a:focus, 
+.block_studentperformancepredictor button:focus, 
+.block_studentperformancepredictor .btn:focus, 
+.block_studentperformancepredictor [tabindex]:focus {
+    outline: 2px solid #005cbf;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 2px #b8daff;
+}
+.block_studentperformancepredictor a:focus-visible, 
+.block_studentperformancepredictor button:focus-visible, 
+.block_studentperformancepredictor .btn:focus-visible {
+    outline: 2px solid #005cbf;
+    outline-offset: 2px;
+}
+
+/* Prediction stats styles */
+.block_studentperformancepredictor .spp-prediction-stats {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.block_studentperformancepredictor .spp-probability {
+    margin-bottom: 10px;
+}
+
+.block_studentperformancepredictor .spp-probability .spp-label,
+.block_studentperformancepredictor .spp-risk .spp-label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 5px;
+}
+
+.block_studentperformancepredictor .spp-probability .spp-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+/* Risk level styles with improved contrast */
+.block_studentperformancepredictor .spp-risk {
+    margin-bottom: 10px;
+}
+
+.block_studentperformancepredictor .spp-risk .spp-value {
+    font-weight: 600;
+}
+
+.block_studentperformancepredictor .spp-risk-high {
+    color: #b3001b;
+    background: #f8d7da;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+.block_studentperformancepredictor .spp-risk-medium {
+    color: #b36b00;
+    background: #fff3cd;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+.block_studentperformancepredictor .spp-risk-low {
+    color: #1e7e34;
+    background: #d4edda;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+.block_studentperformancepredictor .spp-risk-unknown {
+    color: #6c757d;
+    background: #e2e3e5;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+
+/* Update time styles */
+.block_studentperformancepredictor .spp-update-time {
+    font-size: 0.85rem;
+    color: #6c757d;
+    margin-top: 5px;
+}
+
+/* Chart container styles */
+.block_studentperformancepredictor .spp-chart-container {
+    height: 250px;
+    margin: 15px 0;
+}
+
+/* Suggestions styles */
+.block_studentperformancepredictor .spp-suggestions {
+    margin-top: 20px;
+}
+
+.block_studentperformancepredictor .spp-suggestions h5 {
+    margin-bottom: 15px;
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-suggestions-list .list-group-item {
+    transition: background-color 0.2s;
+    border-left: 3px solid transparent;
+}
+
+.block_studentperformancepredictor .spp-suggestions-list .list-group-item:hover {
+    background-color: #f8f9fa;
+}
+
+.block_studentperformancepredictor .spp-suggestion-content h6 {
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-suggestion-content p {
+    color: #495057;
+    margin-bottom: 10px;
+}
+
+.block_studentperformancepredictor .spp-suggestion-actions {
+    margin-top: 10px;
+}
+
+.block_studentperformancepredictor .spp-suggestion-actions .btn {
+    margin-right: 5px;
+    margin-bottom: 5px;
+}
+
+.block_studentperformancepredictor .spp-suggestion-actions .badge {
+    margin-right: 5px;
+}
+
+/* Admin interface styles */
+.block_studentperformancepredictor .spp-admin-actions {
+    margin-bottom: 20px;
+}
+
+.block_studentperformancepredictor .spp-course-overview {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.block_studentperformancepredictor .spp-stat-total {
+    margin-bottom: 15px;
+    border-bottom: 1px solid #e9ecef;
+    padding-bottom: 10px;
+}
+
+.block_studentperformancepredictor .spp-stat-total .spp-label {
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-stat-total .spp-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-left: 10px;
+}
+
+.block_studentperformancepredictor .spp-risk-distribution .spp-label {
+    display: inline-block;
+    width: 100px;
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-risk-distribution > div {
+    margin-bottom: 8px;
+}
+
+/* Loading indicator */
+.block_studentperformancepredictor .spp-loading {
+    text-align: center;
+    padding: 20px;
+    color: #6c757d;
+}
+
+.block_studentperformancepredictor .spp-loading i {
+    margin-right: 10px;
+}
+
+/* Form styles */
+.block_studentperformancepredictor .spp-form-container {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.block_studentperformancepredictor .spp-form-container .form-group {
+    margin-bottom: 15px;
+}
+
+/* Table styles */
+.block_studentperformancepredictor .spp-table {
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+.block_studentperformancepredictor .spp-table th {
+    background-color: #f8f9fa;
+    border-bottom: 2px solid #dee2e6;
+    padding: 12px;
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-table td {
+    padding: 12px;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.block_studentperformancepredictor .spp-table tr:hover {
+    background-color: #f8f9fa;
+}
+
+/* Course selector styling */
+.spp-course-selector-container {
+    margin-bottom: 15px;
+}
+
+.spp-course-selector {
+    width: 100%;
+    max-width: 100%;
+    margin-bottom: 10px;
+}
+
+.spp-course-selector .custom-select {
+    width: 100%;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 8px 12px;
+    background-color: #f8f9fa;
+}
+
+.spp-course-selector .custom-select:focus {
+    border-color: #80bdff;
+    outline: 0;
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+/* Global model indicator */
+.spp-model-type {
+    margin-top: 5px;
+    padding: 5px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    border-left: 3px solid #17a2b8;
+}
+
+/* Responsive styles */
+@media (max-width: 768px) {
+    .block_studentperformancepredictor .spp-chart-container {
+        height: 200px;
+    }
+    .block_studentperformancepredictor .col-md-6 {
+        margin-bottom: 15px;
+    }
+    .block_studentperformancepredictor .spp-admin-actions .btn-group {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+    }
+    .block_studentperformancepredictor .spp-admin-actions .btn {
+        margin-bottom: 5px;
+        border-radius: 4px !important;
+    }
+    .block_studentperformancepredictor .spp-risk-distribution .spp-label {
+        width: auto;
+        margin-right: 10px;
+    }
+    .block_studentperformancepredictor .spp-heading {
+        font-size: 1rem;
+    }
+    .spp-course-selector {
+        margin-bottom: 15px;
+    }
+
+    .spp-course-selector .custom-select {
+        font-size: 14px;
+    }
+}
