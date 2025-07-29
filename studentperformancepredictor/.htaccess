@@ -1,0 +1,24 @@
+# .htaccess file for Student Performance Predictor block
+
+# Ensure PHP files cannot be accessed directly outside Moodle
+<FilesMatch "\.(php)$">
+  order deny,allow
+  deny from all
+</FilesMatch>
+
+# Allow index.php
+<Files "index.php">
+  order allow,deny
+  allow from all
+</Files>
+
+# Set directory permissions for data directories
+<IfModule mod_dir.c>
+  <Directory "models">
+    Options -Indexes
+    AllowOverride All
+    Require all granted
+    Order allow,deny
+    Allow from all
+  </Directory>
+</IfModule>
