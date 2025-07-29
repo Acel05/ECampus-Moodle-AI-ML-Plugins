@@ -22,10 +22,14 @@ class training_manager {
     public static function schedule_training(int $courseid, int $datasetid, ?string $algorithm = null): bool {
         global $USER, $DB;
 
+        // Add more detailed logging for debugging
+        error_log("[SPP] Scheduling training task for course: $courseid, dataset: $datasetid, algorithm: $algorithm");
+
         // Verify the dataset exists and belongs to the course if course-specific
         if ($courseid > 0) {
             $dataset = $DB->get_record('block_spp_datasets', ['id' => $datasetid, 'courseid' => $courseid]);
             if (!$dataset) {
+                error_log("[SPP] Dataset not found or does not belong to course");
                 debugging('Dataset not found or does not belong to course', DEBUG_DEVELOPER);
                 return false;
             }
@@ -33,6 +37,7 @@ class training_manager {
             // For global models, just check if dataset exists
             $dataset = $DB->get_record('block_spp_datasets', ['id' => $datasetid]);
             if (!$dataset) {
+                error_log("[SPP] Dataset not found");
                 debugging('Dataset not found', DEBUG_DEVELOPER);
                 return false;
             }
@@ -50,36 +55,59 @@ class training_manager {
         $model->timemodified = time();
         $model->usermodified = $USER->id;
 
-        $modelid = $DB->insert_record('block_spp_models', $model);
-        if (!$modelid) {
-            debugging('Failed to create model record', DEBUG_DEVELOPER);
+        try {
+            $modelid = $DB->insert_record('block_spp_models', $model);
+            if (!$modelid) {
+                error_log("[SPP] Failed to create model record");
+                debugging('Failed to create model record', DEBUG_DEVELOPER);
+                return false;
+            }
+
+            error_log("[SPP] Created model record with ID: $modelid");
+
+            // Log initial training event
+            self::log_training_event($modelid, 'scheduled', 'Training task scheduled');
+        } catch (\Exception $e) {
+            error_log("[SPP] Error creating model record: " . $e->getMessage());
+            debugging('Error creating model record: ' . $e->getMessage(), DEBUG_DEVELOPER);
             return false;
         }
 
-        // Log initial training event
-        self::log_training_event($modelid, 'scheduled', 'Training task scheduled');
-
         // Create adhoc task
-        $task = new \block_studentperformancepredictor\task\adhoc_train_model();
-        $customdata = [
-            'courseid' => $courseid,
-            'datasetid' => $datasetid,
-            'algorithm' => $algorithm,
-            'userid' => $USER->id,
-            'timequeued' => time(),
-            'modelid' => $modelid
-        ];
-        $task->set_custom_data($customdata);
-
-        // Add debugging information
-        debugging('Scheduling training task for course ' . $courseid . ' with dataset ' . $datasetid, DEBUG_DEVELOPER);
-
         try {
+            // Make sure the class exists and is loaded
+            if (!class_exists('\\block_studentperformancepredictor\\task\\adhoc_train_model')) {
+                error_log("[SPP] adhoc_train_model class not found");
+                debugging('adhoc_train_model class not found', DEBUG_DEVELOPER);
+                return false;
+            }
+
+            $task = new \block_studentperformancepredictor\task\adhoc_train_model();
+
+            // Set custom data with all required information
+            $customdata = [
+                'courseid' => $courseid,
+                'datasetid' => $datasetid,
+                'algorithm' => $algorithm,
+                'userid' => $USER->id,
+                'timequeued' => time(),
+                'modelid' => $modelid
+            ];
+
+            error_log("[SPP] Setting custom data: " . json_encode($customdata));
+            $task->set_custom_data($customdata);
+
+            // Add debugging information
+            debugging('Scheduling training task for course ' . $courseid . ' with dataset ' . $datasetid, DEBUG_DEVELOPER);
+
             // Queue the task with high priority
-            \core\task\manager::queue_adhoc_task($task, true);
-            debugging('Training task scheduled successfully', DEBUG_DEVELOPER);
+            $taskid = \core\task\manager::queue_adhoc_task($task, true);
+            error_log("[SPP] Task queued with ID: $taskid");
+            debugging('Training task scheduled successfully with ID: ' . $taskid, DEBUG_DEVELOPER);
+
             return true;
         } catch (\Exception $e) {
+            error_log("[SPP] Error scheduling training task: " . $e->getMessage() . "\n" . $e->getTraceAsString());
             debugging('Error scheduling training task: ' . $e->getMessage(), DEBUG_DEVELOPER);
 
             // Update model record to reflect failure
