@@ -491,17 +491,40 @@ function block_studentperformancepredictor_handle_api_error($error, $endpoint, $
 function block_studentperformancepredictor_train_model_via_backend($courseid, $datasetid, $algorithm = null) {
     global $DB, $USER, $CFG;
 
+    // Add detailed logging
+    error_log("[SPP] Starting training model via backend for course $courseid, dataset $datasetid, algorithm $algorithm");
+
     try {
         // Get dataset information
         $dataset = $DB->get_record('block_spp_datasets', ['id' => $datasetid], '*', MUST_EXIST);
 
         // Normalize file path for backend
         $dataset_filepath = str_replace('\\', '/', $dataset->filepath);
+        error_log("[SPP] Original dataset filepath: $dataset_filepath");
 
         // Bitnami path adjustments for mounted volumes
         if (strpos($dataset_filepath, '/bitnami/moodle') !== false) {
             // Convert Bitnami path to container path
             $dataset_filepath = str_replace('/bitnami/moodle', $CFG->dirroot, $dataset_filepath);
+            error_log("[SPP] Adjusted dataset filepath for Bitnami: $dataset_filepath");
+        }
+
+        // Double check file exists
+        if (!file_exists($dataset_filepath)) {
+            error_log("[SPP] Warning: Dataset file not found at: $dataset_filepath");
+
+            // Try to find the file in a different location
+            $basename = basename($dataset_filepath);
+            $alt_path = $CFG->dataroot . '/blocks_studentperformancepredictor/course_' . $courseid . '/datasets/' . $basename;
+
+            if (file_exists($alt_path)) {
+                error_log("[SPP] Found dataset at alternate path: $alt_path");
+                $dataset_filepath = $alt_path;
+            } else {
+                error_log("[SPP] Could not find dataset file in alternate location");
+            }
+        } else {
+            error_log("[SPP] Dataset file exists at: $dataset_filepath");
         }
 
         // Prepare request payload
@@ -511,6 +534,8 @@ function block_studentperformancepredictor_train_model_via_backend($courseid, $d
             'algorithm' => $algorithm ?: 'randomforest',
             'userid' => $USER->id
         ];
+
+        error_log("[SPP] Calling backend API with payload: " . json_encode($payload));
 
         // Call backend API
         $debug = get_config('block_studentperformancepredictor', 'enabledebug');
@@ -522,8 +547,12 @@ function block_studentperformancepredictor_train_model_via_backend($courseid, $d
 
         if (!$response || !isset($response['model_id'])) {
             $error_msg = isset($response['detail']) ? $response['detail'] : 'Invalid response from backend';
+            error_log("[SPP] Error response from backend: " . json_encode($response));
+            error_log("[SPP] Error message: $error_msg");
             throw new \moodle_exception('trainingfailed', 'block_studentperformancepredictor', '', $error_msg);
         }
+
+        error_log("[SPP] Successful response from backend: " . json_encode($response));
 
         // Create a record in the database
         $model = new \stdClass();
@@ -542,7 +571,31 @@ function block_studentperformancepredictor_train_model_via_backend($courseid, $d
         $model->timemodified = time();
         $model->usermodified = $USER->id;
 
-        $model_db_id = $DB->insert_record('block_spp_models', $model);
+        // Check if we're updating an existing model or creating a new one
+        $existing_model = $DB->get_record('block_spp_models', [
+            'courseid' => $courseid,
+            'datasetid' => $datasetid,
+            'trainstatus' => 'training',
+            'algorithmtype' => $response['algorithm']
+        ], '*', IGNORE_MULTIPLE);
+
+        if ($existing_model) {
+            error_log("[SPP] Updating existing model {$existing_model->id}");
+
+            // Update the existing model
+            $model->id = $existing_model->id;
+            if ($DB->update_record('block_spp_models', $model)) {
+                error_log("[SPP] Successfully updated existing model");
+                $model_db_id = $existing_model->id;
+            } else {
+                error_log("[SPP] Failed to update existing model, creating new record");
+                // Fall back to creating a new record
+                $model_db_id = $DB->insert_record('block_spp_models', $model);
+            }
+        } else {
+            error_log("[SPP] Creating new model record");
+            $model_db_id = $DB->insert_record('block_spp_models', $model);
+        }
 
         if ($debug) {
             debugging("Model training completed successfully. Model ID: {$model_db_id}", DEBUG_DEVELOPER);
@@ -551,7 +604,8 @@ function block_studentperformancepredictor_train_model_via_backend($courseid, $d
         return $model_db_id;
 
     } catch (\Exception $e) {
-        debugging('Error training model: ' . $e->getMessage() . "\n" . $e->getTraceAsString(), DEBUG_DEVELOPER);
+        error_log("[SPP] Error training model: " . $e->getMessage() . "\n" . $e->getTraceAsString());
+        debugging('Error training model: ' . $e->getMessage(), DEBUG_DEVELOPER);
 
         // If we have a model info in the DB but training failed, mark it as failed
         if (isset($payload) && isset($courseid) && isset($datasetid)) {
@@ -567,7 +621,22 @@ function block_studentperformancepredictor_train_model_via_backend($courseid, $d
                 $pending_model->errormessage = $e->getMessage();
                 $pending_model->timemodified = time();
                 $DB->update_record('block_spp_models', $pending_model);
-                debugging("Updated model {$pending_model->id} status to failed", DEBUG_DEVELOPER);
+                error_log("[SPP] Updated model {$pending_model->id} status to failed");
+            }
+
+            // Also look for models in training status
+            $training_model = $DB->get_record('block_spp_models', [
+                'courseid' => $courseid,
+                'datasetid' => $datasetid,
+                'trainstatus' => 'training'
+            ], '*', IGNORE_MULTIPLE);
+
+            if ($training_model) {
+                $training_model->trainstatus = 'failed';
+                $training_model->errormessage = $e->getMessage();
+                $training_model->timemodified = time();
+                $DB->update_record('block_spp_models', $training_model);
+                error_log("[SPP] Updated model {$training_model->id} status to failed");
             }
         }
 
