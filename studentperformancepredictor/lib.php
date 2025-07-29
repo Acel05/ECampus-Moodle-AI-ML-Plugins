@@ -988,3 +988,54 @@ function block_studentperformancepredictor_has_global_model() {
 
     return $DB->record_exists('block_spp_models', ['courseid' => 0, 'active' => 1, 'trainstatus' => 'complete']);
 }
+
+/**
+ * Clean up any pending models without corresponding tasks.
+ *
+ * @param int $courseid Course ID (0 for all courses)
+ * @return int Number of models fixed
+ */
+function block_studentperformancepredictor_cleanup_pending_models($courseid = 0) {
+    global $DB;
+
+    $count = 0;
+    $conditions = [];
+    $params = [];
+
+    // Set conditions based on courseid
+    if ($courseid > 0) {
+        $conditions[] = "courseid = :courseid";
+        $params['courseid'] = $courseid;
+    }
+
+    // Add status conditions
+    $conditions[] = "trainstatus IN ('pending', 'training')";
+
+    // Build the WHERE clause
+    $where = implode(' AND ', $conditions);
+
+    // Get all pending/training models
+    $models = $DB->get_records_select('block_spp_models', $where, $params);
+
+    foreach ($models as $model) {
+        // Check if there's a corresponding adhoc task
+        $sql = "SELECT COUNT(*) FROM {task_adhoc}
+                WHERE classname = ?
+                AND " . $DB->sql_like('customdata', '?');
+
+        $classname = '\\block_studentperformancepredictor\\task\\adhoc_train_model';
+        $customdata = '%"courseid":' . $model->courseid . '%';
+        $task_count = $DB->count_records_sql($sql, [$classname, $customdata]);
+
+        // If no task found, mark model as failed
+        if ($task_count == 0) {
+            $model->trainstatus = 'failed';
+            $model->errormessage = 'Task missing - state fixed automatically';
+            $model->timemodified = time();
+            $DB->update_record('block_spp_models', $model);
+            $count++;
+        }
+    }
+
+    return $count;
+}
