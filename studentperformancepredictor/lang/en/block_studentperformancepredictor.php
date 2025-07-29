@@ -488,3 +488,12 @@ $string['directorywritable'] = 'Directory writable';
 $string['directorynotwritable'] = 'Directory not writable';
 $string['directoryexists'] = 'Directory exists';
 $string['directorynotexists'] = 'Directory does not exist';
+
+// Model inconsistency messages
+$string['tasksmissing'] = 'Tasks missing - state fixed automatically';
+$string['modelscleaneduptask'] = 'Cleaned up {$a} models with missing tasks';
+$string['trainingcontinue'] = 'Fixed stuck models, continuing with training';
+$string['modelinconsistency'] = 'Model training inconsistency detected';
+$string['modelinconsistencyfixed'] = 'Model inconsistency fixed automatically';
+$string['pending_training'] = 'Pending model training';
+$string['pendingmodels'] = 'Pending models';
