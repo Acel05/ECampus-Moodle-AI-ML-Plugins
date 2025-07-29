@@ -26,7 +26,6 @@ namespace block_studentperformancepredictor\task;
 
 defined('MOODLE_INTERNAL') || die();
 require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
-require_once($CFG->libdir . '/filelib.php');
 
 /**
  * Ad-hoc task to train a new model on demand.
@@ -37,14 +36,13 @@ class adhoc_train_model extends \core\task\adhoc_task {
      */
     public function execute() {
         global $DB, $CFG;
-        require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
 
-        \mtrace('Starting ad-hoc model training task execution...');
+        mtrace('Starting model training task execution...');
 
         // Get the task data
         $data = $this->get_custom_data();
         if (!isset($data->courseid) || !isset($data->datasetid)) {
-            \mtrace('Error: Missing required parameters for ad-hoc model training task.');
+            mtrace('Error: Missing required parameters for model training task.');
             return;
         }
 
@@ -54,7 +52,7 @@ class adhoc_train_model extends \core\task\adhoc_task {
         $userid = isset($data->userid) ? $data->userid : null;
         $modelid = isset($data->modelid) ? $data->modelid : null;
 
-        \mtrace("Training model for course {$courseid} using dataset {$datasetid}");
+        mtrace("Training model for course {$courseid} using dataset {$datasetid} with algorithm {$algorithm}");
 
         try {
             // Update model status if we have a model ID
@@ -62,7 +60,9 @@ class adhoc_train_model extends \core\task\adhoc_task {
                 $model = $DB->get_record('block_spp_models', ['id' => $modelid]);
                 if ($model) {
                     $model->trainstatus = 'training';
+                    $model->timemodified = time();
                     $DB->update_record('block_spp_models', $model);
+                    mtrace("Updated model status to 'training'");
                 }
             }
 
@@ -70,31 +70,32 @@ class adhoc_train_model extends \core\task\adhoc_task {
             $modelid = block_studentperformancepredictor_train_model_via_backend($courseid, $datasetid, $algorithm);
 
             if ($modelid) {
-                \mtrace("Model training completed successfully. Model ID: {$modelid}");
+                mtrace("Model training completed successfully. Model ID: {$modelid}");
 
                 // Trigger model trained event
                 $context = \context_course::instance($courseid > 0 ? $courseid : SITEID);
-                $event = \block_studentperformancepredictor\event\model_trained::create(array(
+                $event = \block_studentperformancepredictor\event\model_trained::create([
                     'context' => $context,
                     'objectid' => $modelid,
-                    'other' => array(
+                    'other' => [
                         'courseid' => $courseid,
-                        'datasetid' => $datasetid
-                    )
-                ));
+                        'datasetid' => $datasetid,
+                        'algorithm' => $algorithm
+                    ]
+                ]);
                 $event->trigger();
 
                 // Generate initial predictions for all students in the course
-                \mtrace("Generating initial predictions for students in course {$courseid}");
+                mtrace("Generating initial predictions for students in course {$courseid}");
                 $result = block_studentperformancepredictor_refresh_predictions_via_backend($courseid);
-                \mtrace("Generated predictions: {$result['success']} successful, {$result['errors']} errors");
+                mtrace("Generated predictions: {$result['success']} successful, {$result['errors']} errors");
 
                 // If user ID specified, send a notification
                 if ($userid) {
                     $this->send_success_notification($userid, $courseid, $modelid);
                 }
             } else {
-                \mtrace("Error: Model training failed.");
+                mtrace("Error: Model training failed or returned null model ID");
 
                 // Update model status if we have a model ID
                 if ($modelid) {
@@ -102,7 +103,9 @@ class adhoc_train_model extends \core\task\adhoc_task {
                     if ($model) {
                         $model->trainstatus = 'failed';
                         $model->errormessage = "Failed to create a valid model";
+                        $model->timemodified = time();
                         $DB->update_record('block_spp_models', $model);
+                        mtrace("Updated model status to 'failed'");
                     }
                 }
 
@@ -112,7 +115,8 @@ class adhoc_train_model extends \core\task\adhoc_task {
                 }
             }
         } catch (\Exception $e) {
-            \mtrace("Error during model training: " . $e->getMessage());
+            mtrace("Error during model training: " . $e->getMessage());
+            mtrace($e->getTraceAsString()); // Add stack trace for better debugging
 
             // Update model status if we have a model ID
             if ($modelid) {
@@ -120,7 +124,9 @@ class adhoc_train_model extends \core\task\adhoc_task {
                 if ($model) {
                     $model->trainstatus = 'failed';
                     $model->errormessage = $e->getMessage();
+                    $model->timemodified = time();
                     $DB->update_record('block_spp_models', $model);
+                    mtrace("Updated model status to 'failed'");
                 }
             }
 
