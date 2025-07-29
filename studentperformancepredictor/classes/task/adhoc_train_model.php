@@ -9,6 +9,16 @@ defined('MOODLE_INTERNAL') || die();
  * Ad-hoc task to train a new model on demand.
  */
 class adhoc_train_model extends \core\task\adhoc_task {
+
+    /**
+     * Return the name of this task.
+     * 
+     * @return string
+     */
+    public function get_name() {
+        return get_string('task_train_model', 'block_studentperformancepredictor');
+    }
+
     /**
      * Execute the ad-hoc task.
      */
@@ -16,10 +26,15 @@ class adhoc_train_model extends \core\task\adhoc_task {
         global $DB, $CFG;
         require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
 
-        mtrace('Starting model training task execution...');
+        mtrace("\n");
+        mtrace("======================================");
+        mtrace("Starting model training task execution");
+        mtrace("======================================");
 
         // Get the task data
         $data = $this->get_custom_data();
+        mtrace("Task data: " . json_encode($data));
+
         if (!isset($data->courseid) || !isset($data->datasetid)) {
             mtrace('Error: Missing required parameters for model training task.');
             return;
@@ -46,16 +61,47 @@ class adhoc_train_model extends \core\task\adhoc_task {
             }
 
             // Call the backend to train the model
-            $modelid = block_studentperformancepredictor_train_model_via_backend($courseid, $datasetid, $algorithm);
+            mtrace("Calling block_studentperformancepredictor_train_model_via_backend()");
+            $result_modelid = block_studentperformancepredictor_train_model_via_backend($courseid, $datasetid, $algorithm);
 
-            if ($modelid) {
-                mtrace("Model training completed successfully. Model ID: {$modelid}");
+            if ($result_modelid) {
+                mtrace("Model training completed successfully. Model ID: {$result_modelid}");
+
+                // If we already had a model ID from the initial creation, update that record
+                if ($modelid && $modelid != $result_modelid) {
+                    mtrace("Updating existing model record $modelid with training results");
+                    $existing_model = $DB->get_record('block_spp_models', ['id' => $modelid]);
+                    $new_model = $DB->get_record('block_spp_models', ['id' => $result_modelid]);
+
+                    // Only update if we found both records
+                    if ($existing_model && $new_model) {
+                        // Copy values from the new model to the existing one
+                        $existing_model->modelid = $new_model->modelid;
+                        $existing_model->modelpath = $new_model->modelpath;
+                        $existing_model->featureslist = $new_model->featureslist;
+                        $existing_model->accuracy = $new_model->accuracy;
+                        $existing_model->metrics = $new_model->metrics;
+                        $existing_model->trainstatus = 'complete';
+                        $existing_model->timemodified = time();
+
+                        // Update the record
+                        if ($DB->update_record('block_spp_models', $existing_model)) {
+                            mtrace("Successfully updated model record");
+
+                            // Delete the new record since we've merged its data
+                            $DB->delete_records('block_spp_models', ['id' => $result_modelid]);
+                            $result_modelid = $modelid;
+                        } else {
+                            mtrace("Failed to update existing model record");
+                        }
+                    }
+                }
 
                 // Trigger model trained event
                 $context = \context_course::instance($courseid > 0 ? $courseid : SITEID);
                 $event = \block_studentperformancepredictor\event\model_trained::create([
                     'context' => $context,
-                    'objectid' => $modelid,
+                    'objectid' => $result_modelid,
                     'other' => [
                         'courseid' => $courseid,
                         'datasetid' => $datasetid,
@@ -71,7 +117,7 @@ class adhoc_train_model extends \core\task\adhoc_task {
 
                 // If user ID specified, send a notification
                 if ($userid) {
-                    $this->send_success_notification($userid, $courseid, $modelid);
+                    $this->send_success_notification($userid, $courseid, $result_modelid);
                 }
             } else {
                 mtrace("Error: Model training failed or returned null model ID");
@@ -114,6 +160,10 @@ class adhoc_train_model extends \core\task\adhoc_task {
                 $this->send_error_notification($userid, $courseid, $e->getMessage());
             }
         }
+
+        mtrace("====================================");
+        mtrace("Finished model training task execution");
+        mtrace("====================================\n");
     }
 
     /**
