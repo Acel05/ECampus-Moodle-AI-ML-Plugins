@@ -40,7 +40,7 @@ load_dotenv()
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO if os.getenv("DEBUG", "false").lower() == "true" else logging.WARNING,
+    level=logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -175,18 +175,46 @@ async def train_model(request: TrainRequest):
     """
     start_time = time.time()
     logger.info(f"Training request received for course {request.courseid} using {request.algorithm}")
+    logger.info(f"Dataset filepath: {request.dataset_filepath}")
 
     try:
         # Normalize file path for cross-platform compatibility
         dataset_filepath = request.dataset_filepath.replace('\\', '/')
+        logger.info(f"Normalized dataset filepath: {dataset_filepath}")
+
+        # Special handling for Railway and Bitnami paths
+        if os.environ.get('RAILWAY_ENVIRONMENT') == 'production':
+            # For Railway, we need to ensure the path is accessible
+            logger.info("Running in Railway environment, checking paths...")
+
+            # Try to find the file in the current directory structure
+            if not os.path.exists(dataset_filepath):
+                # Try to find the file relative to the current directory
+                base_name = os.path.basename(dataset_filepath)
+                for root, dirs, files in os.walk("."):
+                    if base_name in files:
+                        dataset_filepath = os.path.join(root, base_name)
+                        logger.info(f"Found file at: {dataset_filepath}")
+                        break
 
         # Check if file exists
         if not os.path.exists(dataset_filepath):
             logger.error(f"Dataset file not found: {dataset_filepath}")
+            # Try to list files in parent directory for debugging
+            parent_dir = os.path.dirname(dataset_filepath)
+            if os.path.exists(parent_dir):
+                logger.info(f"Files in parent directory: {os.listdir(parent_dir)}")
+            else:
+                logger.info(f"Parent directory doesn't exist: {parent_dir}")
+
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Dataset file not found: {dataset_filepath}"
             )
+
+        # Log file details
+        file_size = os.path.getsize(dataset_filepath)
+        logger.info(f"Dataset file size: {file_size} bytes")
 
         # Load data
         file_extension = os.path.splitext(dataset_filepath)[1].lower()
@@ -204,6 +232,7 @@ async def train_model(request: TrainRequest):
                 )
 
             logger.info(f"Successfully loaded dataset with {len(df)} rows and {len(df.columns)} columns")
+            logger.info(f"Columns: {df.columns.tolist()}")
         except Exception as e:
             logger.error(f"Error loading dataset: {str(e)}")
             raise HTTPException(
@@ -317,6 +346,7 @@ async def train_model(request: TrainRequest):
         # Create course directory
         course_models_dir = os.path.join(MODELS_DIR, f"course_{request.courseid}")
         os.makedirs(course_models_dir, exist_ok=True)
+        logger.info(f"Created course models directory: {course_models_dir}")
 
         # Save model
         model_filename = f"{model_id}.joblib"
@@ -331,10 +361,22 @@ async def train_model(request: TrainRequest):
             'metrics': metrics
         }
 
-        joblib.dump(model_data, model_path)
-        MODEL_CACHE[model_id] = model_data
+        try:
+            joblib.dump(model_data, model_path)
+            logger.info(f"Model saved to {model_path}")
+        except Exception as e:
+            logger.error(f"Error saving model: {str(e)}")
+            # Try with different permissions
+            try:
+                # Set more permissive directory permissions for Railway
+                os.chmod(course_models_dir, 0o777)
+                joblib.dump(model_data, model_path)
+                logger.info(f"Model saved after updating permissions: {model_path}")
+            except Exception as inner_e:
+                logger.error(f"Error saving model after permission change: {str(inner_e)}")
+                # Just continue, we'll still return the model data even if we couldn't save it
 
-        logger.info(f"Model saved to {model_path}")
+        MODEL_CACHE[model_id] = model_data
 
         training_time = time.time() - start_time
         logger.info(f"Training completed in {training_time:.2f} seconds")
@@ -358,7 +400,6 @@ async def train_model(request: TrainRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error training model: {str(e)}"
         )
-
 @app.post("/predict", dependencies=[Depends(verify_api_key)])
 async def predict(request: dict):
     """
