@@ -130,28 +130,46 @@ class training_manager {
      */
     public static function has_pending_training(int $courseid): bool {
         global $DB;
-
-        // Check for pending adhoc_train_model tasks
+    
+        // Check for pending adhoc_train_model tasks in task_adhoc table
         $sql = "SELECT COUNT(*) FROM {task_adhoc}
                 WHERE classname = ?
                 AND " . $DB->sql_like('customdata', '?');
-
+    
         $classname = '\\block_studentperformancepredictor\\task\\adhoc_train_model';
         $customdata = '%"courseid":' . $courseid . '%';
-        $count = $DB->count_records_sql($sql, [$classname, $customdata]);
-
+        $adhoc_count = $DB->count_records_sql($sql, [$classname, $customdata]);
+    
         // Also check for models with 'pending' or 'training' status
-        $pendingmodels = $DB->count_records('block_spp_models', [
+        $pending_models = $DB->count_records('block_spp_models', [
             'courseid' => $courseid, 
             'trainstatus' => 'pending'
         ]);
-
-        $trainingmodels = $DB->count_records('block_spp_models', [
+    
+        $training_models = $DB->count_records('block_spp_models', [
             'courseid' => $courseid, 
             'trainstatus' => 'training'
         ]);
-
-        return ($count > 0 || $pendingmodels > 0 || $trainingmodels > 0);
+    
+        // If we have pending models but no adhoc tasks, fix the inconsistency
+        if (($pending_models > 0 || $training_models > 0) && $adhoc_count == 0) {
+            // This is the inconsistent state - fix it by updating model status
+            $DB->set_field('block_spp_models', 'trainstatus', 'failed', [
+                'courseid' => $courseid,
+                'trainstatus' => 'pending'
+            ]);
+    
+            $DB->set_field('block_spp_models', 'trainstatus', 'failed', [
+                'courseid' => $courseid,
+                'trainstatus' => 'training'
+            ]);
+    
+            // Now we don't have pending training anymore
+            return false;
+        }
+    
+        // Return true if there's either an adhoc task or models in pending/training state
+        return $adhoc_count > 0;
     }
 
     /**
