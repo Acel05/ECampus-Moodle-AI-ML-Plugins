@@ -1,26 +1,5 @@
 <?php
-// This file is part of Moodle - http://moodle.org/
-//
-// Moodle is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// Moodle is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
-
-/**
- * Task definitions for Student Performance Predictor.
- *
- * @package    block_studentperformancepredictor
- * @copyright  2023 Your Name <[Email]>
- * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
- */
+// db/tasks.php
 
 defined('MOODLE_INTERNAL') || die();
 
@@ -34,5 +13,18 @@ $tasks = [
         'month' => '*',
         'dayofweek' => '*',
         'disabled' => 0,
+    ],
+
+    // Make sure we have the adhoc task registered
+    [
+        'classname' => 'block_studentperformancepredictor\task\adhoc_train_model',
+        'blocking' => 0,
+        'minute' => '*',
+        'hour' => '*',
+        'day' => '*',
+        'month' => '*',
+        'dayofweek' => '*',
+        'disabled' => 0,
+        'adhoc' => true
     ],
 ];
