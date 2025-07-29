@@ -64,15 +64,18 @@ class block_studentperformancepredictor extends block_base {
      */
     public function get_content() {
         global $USER, $COURSE, $OUTPUT, $PAGE, $DB, $CFG;
-
+    
         if ($this->content !== null) {
             return $this->content;
         }
-
+    
         $this->content = new stdClass();
         $this->content->text = '';
         $this->content->footer = '';
-
+    
+        // Automatically clean up any stuck models
+        block_studentperformancepredictor_cleanup_pending_models(0);
+    
         // Get course context
         $coursecontext = null;
         $courseid = 0;
