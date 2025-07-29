@@ -251,6 +251,48 @@ function xmldb_block_studentperformancepredictor_upgrade($oldversion) {
 
         upgrade_block_savepoint(true, 2025063004, 'studentperformancepredictor');
     }
+    
+    // Fix any stuck models and task registration issues
+    if ($oldversion < 2025063006) {
+        // First clean up any stuck models
+        $stuck_models = 0;
+    
+        // Get all pending/training models
+        $models = $DB->get_records_select('block_spp_models', "trainstatus IN ('pending', 'training')");
+    
+        foreach ($models as $model) {
+            // Check if there's a corresponding adhoc task
+            $sql = "SELECT COUNT(*) FROM {task_adhoc}
+                    WHERE classname = ?
+                    AND " . $DB->sql_like('customdata', '?');
+    
+            $classname = '\\block_studentperformancepredictor\\task\\adhoc_train_model';
+            $customdata = '%"courseid":' . $model->courseid . '%';
+            $task_count = $DB->count_records_sql($sql, [$classname, $customdata]);
+    
+            // If no task found, mark model as failed
+            if ($task_count == 0) {
+                $model->trainstatus = 'failed';
+                $model->errormessage = 'Task missing - state fixed during upgrade';
+                $model->timemodified = time();
+                $DB->update_record('block_spp_models', $model);
+                $stuck_models++;
+            }
+        }
+    
+        if ($stuck_models > 0) {
+            mtrace("Fixed $stuck_models stuck models");
+        }
+    
+        // Make sure the scheduled task is properly registered
+        \core\task\manager::reset_scheduled_tasks_for_component('block_studentperformancepredictor');
+    
+        // Remove any incorrect task entries
+        $DB->delete_records_select('task_scheduled', 
+            "classname = '\\\\block_studentperformancepredictor\\\\task\\\\adhoc_train_model'");
+    
+        upgrade_block_savepoint(true, 2025063006, 'studentperformancepredictor');
+    }
 
     return true;
 }
