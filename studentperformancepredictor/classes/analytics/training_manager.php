@@ -22,14 +22,16 @@ class training_manager {
     public static function schedule_training(int $courseid, int $datasetid, ?string $algorithm = null): bool {
         global $USER, $DB;
 
+        // First clean up any stuck models
+        block_studentperformancepredictor_cleanup_pending_models($courseid);
+
         // Add more detailed logging for debugging
-        error_log("[SPP] Scheduling training task for course: $courseid, dataset: $datasetid, algorithm: $algorithm");
+        debugging('Scheduling training task for course: ' . $courseid . ', dataset: ' . $datasetid . ', algorithm: ' . $algorithm, DEBUG_DEVELOPER);
 
         // Verify the dataset exists and belongs to the course if course-specific
         if ($courseid > 0) {
             $dataset = $DB->get_record('block_spp_datasets', ['id' => $datasetid, 'courseid' => $courseid]);
             if (!$dataset) {
-                error_log("[SPP] Dataset not found or does not belong to course");
                 debugging('Dataset not found or does not belong to course', DEBUG_DEVELOPER);
                 return false;
             }
@@ -37,7 +39,6 @@ class training_manager {
             // For global models, just check if dataset exists
             $dataset = $DB->get_record('block_spp_datasets', ['id' => $datasetid]);
             if (!$dataset) {
-                error_log("[SPP] Dataset not found");
                 debugging('Dataset not found', DEBUG_DEVELOPER);
                 return false;
             }
@@ -55,59 +56,37 @@ class training_manager {
         $model->timemodified = time();
         $model->usermodified = $USER->id;
 
-        try {
-            $modelid = $DB->insert_record('block_spp_models', $model);
-            if (!$modelid) {
-                error_log("[SPP] Failed to create model record");
-                debugging('Failed to create model record', DEBUG_DEVELOPER);
-                return false;
-            }
-
-            error_log("[SPP] Created model record with ID: $modelid");
-
-            // Log initial training event
-            self::log_training_event($modelid, 'scheduled', 'Training task scheduled');
-        } catch (\Exception $e) {
-            error_log("[SPP] Error creating model record: " . $e->getMessage());
-            debugging('Error creating model record: ' . $e->getMessage(), DEBUG_DEVELOPER);
+        $modelid = $DB->insert_record('block_spp_models', $model);
+        if (!$modelid) {
+            debugging('Failed to create model record', DEBUG_DEVELOPER);
             return false;
         }
 
+        // Log initial training event
+        self::log_training_event($modelid, 'scheduled', 'Training task scheduled');
+
         // Create adhoc task
+        $task = new \block_studentperformancepredictor\task\adhoc_train_model();
+        $customdata = [
+            'courseid' => $courseid,
+            'datasetid' => $datasetid,
+            'algorithm' => $algorithm,
+            'userid' => $USER->id,
+            'timequeued' => time(),
+            'modelid' => $modelid
+        ];
+        $task->set_custom_data($customdata);
+
+        // Add debugging information
+        debugging('Scheduling training task for course ' . $courseid . ' with dataset ' . $datasetid, DEBUG_DEVELOPER);
+
         try {
-            // Make sure the class exists and is loaded
-            if (!class_exists('\\block_studentperformancepredictor\\task\\adhoc_train_model')) {
-                error_log("[SPP] adhoc_train_model class not found");
-                debugging('adhoc_train_model class not found', DEBUG_DEVELOPER);
-                return false;
-            }
-
-            $task = new \block_studentperformancepredictor\task\adhoc_train_model();
-
-            // Set custom data with all required information
-            $customdata = [
-                'courseid' => $courseid,
-                'datasetid' => $datasetid,
-                'algorithm' => $algorithm,
-                'userid' => $USER->id,
-                'timequeued' => time(),
-                'modelid' => $modelid
-            ];
-
-            error_log("[SPP] Setting custom data: " . json_encode($customdata));
-            $task->set_custom_data($customdata);
-
-            // Add debugging information
-            debugging('Scheduling training task for course ' . $courseid . ' with dataset ' . $datasetid, DEBUG_DEVELOPER);
-
             // Queue the task with high priority
-            $taskid = \core\task\manager::queue_adhoc_task($task, true);
-            error_log("[SPP] Task queued with ID: $taskid");
-            debugging('Training task scheduled successfully with ID: ' . $taskid, DEBUG_DEVELOPER);
+            \core\task\manager::queue_adhoc_task($task, true);
+            debugging('Training task scheduled successfully', DEBUG_DEVELOPER);
 
             return true;
         } catch (\Exception $e) {
-            error_log("[SPP] Error scheduling training task: " . $e->getMessage() . "\n" . $e->getTraceAsString());
             debugging('Error scheduling training task: ' . $e->getMessage(), DEBUG_DEVELOPER);
 
             // Update model record to reflect failure
@@ -130,37 +109,37 @@ class training_manager {
      */
     public static function has_pending_training(int $courseid): bool {
         global $DB;
-    
+
         // First, check for actual adhoc tasks in the database
         $sql = "SELECT COUNT(*) FROM {task_adhoc}
                 WHERE classname = ?
                 AND " . $DB->sql_like('customdata', '?');
-    
+
         $classname = '\\block_studentperformancepredictor\\task\\adhoc_train_model';
         $customdata = '%"courseid":' . $courseid . '%';
         $adhoc_count = $DB->count_records_sql($sql, [$classname, $customdata]);
-    
+
         // If we have adhoc tasks, training is pending
         if ($adhoc_count > 0) {
             debugging('Found actual adhoc tasks for course: ' . $courseid, DEBUG_DEVELOPER);
             return true;
         }
-    
+
         // If no adhoc tasks, check for models in pending/training state
         $pending_models = $DB->count_records('block_spp_models', [
             'courseid' => $courseid, 
             'trainstatus' => 'pending'
         ]);
-    
+
         $training_models = $DB->count_records('block_spp_models', [
             'courseid' => $courseid, 
             'trainstatus' => 'training'
         ]);
-    
+
         // If we have pending/training models but no adhoc tasks, fix the inconsistency
         if ($pending_models > 0 || $training_models > 0) {
             debugging('Found stuck models without adhoc tasks for course: ' . $courseid, DEBUG_DEVELOPER);
-    
+
             // This is the inconsistent state - fix it by updating model status
             if ($pending_models > 0) {
                 debugging('Fixing pending models for course: ' . $courseid, DEBUG_DEVELOPER);
@@ -173,7 +152,7 @@ class training_manager {
                     'trainstatus' => 'failed'
                 ]);
             }
-    
+
             if ($training_models > 0) {
                 debugging('Fixing training models for course: ' . $courseid, DEBUG_DEVELOPER);
                 $DB->set_field('block_spp_models', 'trainstatus', 'failed', [
@@ -185,11 +164,11 @@ class training_manager {
                     'trainstatus' => 'failed'
                 ]);
             }
-    
+
             // Now we don't have pending training anymore
             return false;
         }
-    
+
         // No pending training
         return false;
     }
