@@ -14,4 +14,5 @@ $tasks = [
         'dayofweek' => '*',
         'disabled' => 0,
     ],
+    // Remove any adhoc task declarations from here
 ];
