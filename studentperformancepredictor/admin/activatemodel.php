@@ -13,6 +13,9 @@ require_login();
 
 global $DB, $OUTPUT, $USER;
 
+// Clean up any stuck models first
+block_studentperformancepredictor_cleanup_pending_models(0);
+
 // Get parameters
 $courseid = required_param('courseid', PARAM_INT);
 $modelid = optional_param('modelid', 0, PARAM_INT);
