@@ -4,7 +4,6 @@
 namespace block_studentperformancepredictor\task;
 
 defined('MOODLE_INTERNAL') || die();
-require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
 
 /**
  * Ad-hoc task to train a new model on demand.
@@ -15,6 +14,7 @@ class adhoc_train_model extends \core\task\adhoc_task {
      */
     public function execute() {
         global $DB, $CFG;
+        require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
 
         mtrace('Starting model training task execution...');
 
