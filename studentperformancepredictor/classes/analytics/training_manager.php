@@ -131,7 +131,7 @@ class training_manager {
     public static function has_pending_training(int $courseid): bool {
         global $DB;
     
-        // Check for pending adhoc_train_model tasks in task_adhoc table
+        // First, check for actual adhoc tasks in the database
         $sql = "SELECT COUNT(*) FROM {task_adhoc}
                 WHERE classname = ?
                 AND " . $DB->sql_like('customdata', '?');
@@ -140,7 +140,13 @@ class training_manager {
         $customdata = '%"courseid":' . $courseid . '%';
         $adhoc_count = $DB->count_records_sql($sql, [$classname, $customdata]);
     
-        // Also check for models with 'pending' or 'training' status
+        // If we have adhoc tasks, training is pending
+        if ($adhoc_count > 0) {
+            debugging('Found actual adhoc tasks for course: ' . $courseid, DEBUG_DEVELOPER);
+            return true;
+        }
+    
+        // If no adhoc tasks, check for models in pending/training state
         $pending_models = $DB->count_records('block_spp_models', [
             'courseid' => $courseid, 
             'trainstatus' => 'pending'
@@ -151,25 +157,41 @@ class training_manager {
             'trainstatus' => 'training'
         ]);
     
-        // If we have pending models but no adhoc tasks, fix the inconsistency
-        if (($pending_models > 0 || $training_models > 0) && $adhoc_count == 0) {
-            // This is the inconsistent state - fix it by updating model status
-            $DB->set_field('block_spp_models', 'trainstatus', 'failed', [
-                'courseid' => $courseid,
-                'trainstatus' => 'pending'
-            ]);
+        // If we have pending/training models but no adhoc tasks, fix the inconsistency
+        if ($pending_models > 0 || $training_models > 0) {
+            debugging('Found stuck models without adhoc tasks for course: ' . $courseid, DEBUG_DEVELOPER);
     
-            $DB->set_field('block_spp_models', 'trainstatus', 'failed', [
-                'courseid' => $courseid,
-                'trainstatus' => 'training'
-            ]);
+            // This is the inconsistent state - fix it by updating model status
+            if ($pending_models > 0) {
+                debugging('Fixing pending models for course: ' . $courseid, DEBUG_DEVELOPER);
+                $DB->set_field('block_spp_models', 'trainstatus', 'failed', [
+                    'courseid' => $courseid,
+                    'trainstatus' => 'pending'
+                ]);
+                $DB->set_field('block_spp_models', 'errormessage', 'Task missing - state fixed automatically', [
+                    'courseid' => $courseid,
+                    'trainstatus' => 'failed'
+                ]);
+            }
+    
+            if ($training_models > 0) {
+                debugging('Fixing training models for course: ' . $courseid, DEBUG_DEVELOPER);
+                $DB->set_field('block_spp_models', 'trainstatus', 'failed', [
+                    'courseid' => $courseid,
+                    'trainstatus' => 'training'
+                ]);
+                $DB->set_field('block_spp_models', 'errormessage', 'Task missing - state fixed automatically', [
+                    'courseid' => $courseid,
+                    'trainstatus' => 'failed'
+                ]);
+            }
     
             // Now we don't have pending training anymore
             return false;
         }
     
-        // Return true if there's either an adhoc task or models in pending/training state
-        return $adhoc_count > 0;
+        // No pending training
+        return false;
     }
 
     /**
