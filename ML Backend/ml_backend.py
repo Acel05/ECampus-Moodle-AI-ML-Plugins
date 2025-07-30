@@ -10,7 +10,8 @@ import uuid
 import time
 import logging
 import traceback
-import json
+import tempfile
+import shutil
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Union
 
@@ -18,10 +19,24 @@ import numpy as np
 import pandas as pd
 import joblib
 from fastapi import FastAPI, HTTPException, Depends, Header, Request, status, BackgroundTasks
+from fastapi import File, UploadFile, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from dotenv import load_dotenv
+
+# ML imports
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.impute import SimpleImputer
 
 # Load environment variables
 load_dotenv()
@@ -32,24 +47,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# ML imports with error handling
-try:
-    from sklearn.preprocessing import StandardScaler, OneHotEncoder
-    from sklearn.compose import ColumnTransformer
-    from sklearn.pipeline import Pipeline
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.svm import SVC
-    from sklearn.tree import DecisionTreeClassifier
-    from sklearn.neighbors import KNeighborsClassifier
-    from sklearn.impute import SimpleImputer
-except ImportError as e:
-    logger.error(f"Critical error importing scikit-learn components: {str(e)}")
-    logger.error("Please ensure scikit-learn is installed correctly")
-    raise
 
 # Set up FastAPI app - simplified for API only
 app = FastAPI(
@@ -70,23 +67,9 @@ app.add_middleware(
 # Get API key from environment
 API_KEY = os.getenv("API_KEY", "changeme")
 
-# Models storage handling
+# Storage paths
 MODELS_DIR = os.path.join(os.getcwd(), os.getenv("MODELS_DIR", "models"))
-try:
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    # Test write permissions
-    test_file = os.path.join(MODELS_DIR, "test_permissions.txt")
-    with open(test_file, 'w') as f:
-        f.write("Testing write permissions")
-    os.remove(test_file)
-    logger.info(f"Successfully created and verified models directory: {MODELS_DIR}")
-except Exception as e:
-    logger.error(f"Error with models directory {MODELS_DIR}: {str(e)}")
-    # Fall back to /tmp if available
-    if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
-        MODELS_DIR = '/tmp/models'
-        os.makedirs(MODELS_DIR, exist_ok=True)
-        logger.warning(f"Falling back to temporary directory: {MODELS_DIR}")
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 # Models cache
 MODEL_CACHE = {}
@@ -94,11 +77,14 @@ MODEL_CACHE = {}
 # Pydantic models for requests and responses
 class TrainRequest(BaseModel):
     courseid: int
-    dataset_filepath: str
     algorithm: str = "randomforest"  # Default to RandomForest
     target_column: str = "final_outcome"
     id_columns: List[str] = []
     test_size: float = 0.2
+
+    class Config:
+        # Allow arbitrary types for field values
+        arbitrary_types_allowed = True
 
 class TrainResponse(BaseModel):
     model_id: str
@@ -189,34 +175,50 @@ async def health_check():
         }
 
 @app.post("/train", response_model=TrainResponse, dependencies=[Depends(verify_api_key)])
-async def train_model(request: TrainRequest):
+async def train_model(
+    courseid: int = Form(...),
+    algorithm: str = Form("randomforest"),
+    target_column: str = Form("final_outcome", description="Name of the target column"),
+    test_size: float = Form(0.2, description="Test split proportion"),
+    id_columns: str = Form("", description="Comma-separated list of ID columns to ignore"),
+    dataset_file: UploadFile = File(...)
+):
     """
-    Train a machine learning model with the provided dataset.
+    Train a machine learning model with the uploaded dataset.
     """
     start_time = time.time()
-    logger.info(f"Training request received for course {request.courseid} using {request.algorithm}")
+    logger.info(f"Training request received for course {courseid} using {algorithm}")
 
     try:
-        # Normalize file path for cross-platform compatibility
-        dataset_filepath = request.dataset_filepath.replace('\\', '/')
+        # Parse id_columns from comma-separated string
+        id_columns_list = [col.strip() for col in id_columns.split(',')] if id_columns else []
 
-        # Check if file exists
-        if not os.path.exists(dataset_filepath):
-            logger.error(f"Dataset file not found: {dataset_filepath}")
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Dataset file not found: {dataset_filepath}"
-            )
+        # Create a temporary file to store the uploaded dataset
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(dataset_file.filename)[1]) as temp_file:
+            # Copy the uploaded file to the temporary file
+            shutil.copyfileobj(dataset_file.file, temp_file)
+            temp_filepath = temp_file.name
+
+        logger.info(f"Uploaded dataset saved to temporary file: {temp_filepath}")
+
+        # Create a request object with the form data
+        request = TrainRequest(
+            courseid=courseid,
+            algorithm=algorithm,
+            target_column=target_column,
+            id_columns=id_columns_list,
+            test_size=test_size
+        )
 
         # Load data
-        file_extension = os.path.splitext(dataset_filepath)[1].lower()
+        file_extension = os.path.splitext(dataset_file.filename)[1].lower()
         try:
             if file_extension == '.csv':
-                df = pd.read_csv(dataset_filepath)
+                df = pd.read_csv(temp_filepath)
             elif file_extension == '.json':
-                df = pd.read_json(dataset_filepath)
+                df = pd.read_json(temp_filepath)
             elif file_extension in ['.xlsx', '.xls']:
-                df = pd.read_excel(dataset_filepath)
+                df = pd.read_excel(temp_filepath)
             else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -230,6 +232,9 @@ async def train_model(request: TrainRequest):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Error loading dataset: {str(e)}"
             )
+
+        # Remove the temporary file after loading
+        os.unlink(temp_filepath)
 
         # Use a default target column if not found
         if request.target_column not in df.columns:
@@ -421,14 +426,10 @@ async def predict(request: dict):
                     if file == f"{model_id}.joblib":
                         model_path = os.path.join(root, file)
                         logger.info(f"Loading model from {model_path}")
-                        try:
-                            model_data = joblib.load(model_path)
-                            MODEL_CACHE[model_id] = model_data
-                            found = True
-                            break
-                        except Exception as e:
-                            logger.error(f"Failed to load model from {model_path}: {str(e)}")
-                            continue
+                        model_data = joblib.load(model_path)
+                        MODEL_CACHE[model_id] = model_data
+                        found = True
+                        break
                 if found:
                     break
 
@@ -477,6 +478,7 @@ async def predict(request: dict):
             predictions = pipeline.predict(input_df).tolist()
             probabilities = pipeline.predict_proba(input_df).tolist()
             logger.info(f"Prediction successful: {predictions}")
+            logger.info(f"Probabilities: {probabilities}")
         except Exception as e:
             logger.error(f"Error during prediction: {str(e)}")
             raise HTTPException(
