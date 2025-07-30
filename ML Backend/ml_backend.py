@@ -263,6 +263,13 @@ async def train_model(
         categorical_cols = X.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
 
         # Create preprocessing pipeline
+        try:
+            # For newer scikit-learn versions (>=1.2)
+            encoder = OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore')
+        except TypeError:
+            # For older scikit-learn versions
+            encoder = OneHotEncoder(drop='first', sparse=False, handle_unknown='ignore')
+
         preprocessor = ColumnTransformer(
             transformers=[
                 ('num', Pipeline([
@@ -271,7 +278,7 @@ async def train_model(
                 ]), numeric_cols),
                 ('cat', Pipeline([
                     ('imputer', SimpleImputer(strategy='most_frequent')),
-                    ('encoder', OneHotEncoder(drop='first', sparse=False, handle_unknown='ignore'))
+                    ('encoder', encoder)
                 ]), categorical_cols)
             ],
             remainder='drop'
