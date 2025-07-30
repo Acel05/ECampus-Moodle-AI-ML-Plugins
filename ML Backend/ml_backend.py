@@ -10,6 +10,7 @@ import uuid
 import time
 import logging
 import traceback
+import json
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Union
 
@@ -22,19 +23,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from dotenv import load_dotenv
 
-# ML imports
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.impute import SimpleImputer
-
 # Load environment variables
 load_dotenv()
 
@@ -44,6 +32,24 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ML imports with error handling
+try:
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
+    from sklearn.compose import ColumnTransformer
+    from sklearn.pipeline import Pipeline
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.svm import SVC
+    from sklearn.tree import DecisionTreeClassifier
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.impute import SimpleImputer
+except ImportError as e:
+    logger.error(f"Critical error importing scikit-learn components: {str(e)}")
+    logger.error("Please ensure scikit-learn is installed correctly")
+    raise
 
 # Set up FastAPI app - simplified for API only
 app = FastAPI(
@@ -64,9 +70,23 @@ app.add_middleware(
 # Get API key from environment
 API_KEY = os.getenv("API_KEY", "changeme")
 
-# Storage paths
+# Models storage handling
 MODELS_DIR = os.path.join(os.getcwd(), os.getenv("MODELS_DIR", "models"))
-os.makedirs(MODELS_DIR, exist_ok=True)
+try:
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    # Test write permissions
+    test_file = os.path.join(MODELS_DIR, "test_permissions.txt")
+    with open(test_file, 'w') as f:
+        f.write("Testing write permissions")
+    os.remove(test_file)
+    logger.info(f"Successfully created and verified models directory: {MODELS_DIR}")
+except Exception as e:
+    logger.error(f"Error with models directory {MODELS_DIR}: {str(e)}")
+    # Fall back to /tmp if available
+    if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+        MODELS_DIR = '/tmp/models'
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        logger.warning(f"Falling back to temporary directory: {MODELS_DIR}")
 
 # Models cache
 MODEL_CACHE = {}
@@ -401,10 +421,14 @@ async def predict(request: dict):
                     if file == f"{model_id}.joblib":
                         model_path = os.path.join(root, file)
                         logger.info(f"Loading model from {model_path}")
-                        model_data = joblib.load(model_path)
-                        MODEL_CACHE[model_id] = model_data
-                        found = True
-                        break
+                        try:
+                            model_data = joblib.load(model_path)
+                            MODEL_CACHE[model_id] = model_data
+                            found = True
+                            break
+                        except Exception as e:
+                            logger.error(f"Failed to load model from {model_path}: {str(e)}")
+                            continue
                 if found:
                     break
 
@@ -453,7 +477,6 @@ async def predict(request: dict):
             predictions = pipeline.predict(input_df).tolist()
             probabilities = pipeline.predict_proba(input_df).tolist()
             logger.info(f"Prediction successful: {predictions}")
-            logger.info(f"Probabilities: {probabilities}")
         except Exception as e:
             logger.error(f"Error during prediction: {str(e)}")
             raise HTTPException(
