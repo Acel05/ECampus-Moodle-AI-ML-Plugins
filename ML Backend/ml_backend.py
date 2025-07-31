@@ -236,6 +236,10 @@ async def train_model(
         # Remove the temporary file after loading
         os.unlink(temp_filepath)
 
+        # Check for dataset size and potential issues
+        if len(df) < 30:
+            logger.warning(f"Very small dataset with only {len(df)} samples. Model may not be reliable.")
+
         # Use a default target column if not found
         if request.target_column not in df.columns:
             # Look for common target column names
@@ -258,11 +262,27 @@ async def train_model(
         logger.info(f"Features: {feature_names}")
         logger.info(f"Target distribution: {y.value_counts().to_dict()}")
 
+        # Check for class imbalance
+        class_counts = y.value_counts().to_dict()
+        if len(class_counts) > 1:
+            majority_class_count = max(class_counts.values())
+            minority_class_count = min(class_counts.values())
+            imbalance_ratio = majority_class_count / minority_class_count
+            if imbalance_ratio > 3:
+                logger.warning(f"Significant class imbalance detected: ratio {imbalance_ratio:.2f}. "
+                              f"Applying class weight balancing.")
+                class_weight = 'balanced'
+            else:
+                class_weight = None
+        else:
+            logger.warning("Only one class found in target. Model will not be useful for prediction.")
+            class_weight = None
+
         # Identify numeric and categorical columns
         numeric_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
         categorical_cols = X.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
 
-        # Create preprocessing pipeline
+        # Create preprocessing pipeline with robust handling
         try:
             # For newer scikit-learn versions (>=1.2)
             encoder = OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore')
@@ -273,7 +293,7 @@ async def train_model(
         preprocessor = ColumnTransformer(
             transformers=[
                 ('num', Pipeline([
-                    ('imputer', SimpleImputer(strategy='mean')),
+                    ('imputer', SimpleImputer(strategy='median')),  # Use median for robustness to outliers
                     ('scaler', StandardScaler())
                 ]), numeric_cols),
                 ('cat', Pipeline([
@@ -284,27 +304,76 @@ async def train_model(
             remainder='drop'
         )
 
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=request.test_size, random_state=42
-        )
+        # Split data with stratification for better class balance
+        try:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=request.test_size, random_state=42, stratify=y
+            )
+        except ValueError:
+            # If stratification fails (e.g., with only one class), fall back to standard split
+            logger.warning("Stratified split failed, falling back to random split")
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=request.test_size, random_state=42
+            )
 
-        # Select algorithm
+        # Select algorithm with proper regularization to prevent overfitting
         if request.algorithm == 'randomforest':
-            model = RandomForestClassifier(n_estimators=100, random_state=42)
+            # Use fewer trees and limit depth to prevent overfitting
+            model = RandomForestClassifier(
+                n_estimators=100, 
+                max_depth=10,  # Limit depth
+                min_samples_split=5,  # Require more samples to split
+                min_samples_leaf=2,   # Require more samples in leaves
+                class_weight=class_weight,
+                random_state=42
+            )
         elif request.algorithm == 'logisticregression':
-            model = LogisticRegression(max_iter=1000, random_state=42)
+            # Add L2 regularization
+            model = LogisticRegression(
+                C=1.0,  # Inverse of regularization strength
+                class_weight=class_weight,
+                max_iter=1000, 
+                random_state=42
+            )
         elif request.algorithm == 'gradientboosting':
-            model = GradientBoostingClassifier(n_estimators=100, random_state=42)
+            model = GradientBoostingClassifier(
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=3,  # Shallow trees to prevent overfitting
+                subsample=0.8,  # Use 80% of samples per tree
+                random_state=42
+            )
         elif request.algorithm == 'svm':
-            model = SVC(probability=True, random_state=42)
+            model = SVC(
+                C=1.0,
+                kernel='rbf',
+                class_weight=class_weight,
+                probability=True, 
+                random_state=42
+            )
         elif request.algorithm == 'decisiontree':
-            model = DecisionTreeClassifier(random_state=42)
+            model = DecisionTreeClassifier(
+                max_depth=5,  # Limit depth
+                min_samples_split=5,
+                min_samples_leaf=2,
+                class_weight=class_weight,
+                random_state=42
+            )
         elif request.algorithm == 'knn':
-            model = KNeighborsClassifier(n_neighbors=5)
+            model = KNeighborsClassifier(
+                n_neighbors=5,
+                weights='distance'  # Weight by distance for better performance
+            )
         else:
             logger.warning(f"Unsupported algorithm '{request.algorithm}', falling back to RandomForest")
-            model = RandomForestClassifier(n_estimators=100, random_state=42)
+            model = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=10,
+                min_samples_split=5,
+                min_samples_leaf=2,
+                class_weight=class_weight,
+                random_state=42
+            )
             request.algorithm = 'randomforest'
 
         # Create pipeline
@@ -313,7 +382,15 @@ async def train_model(
             ('classifier', model)
         ])
 
-        # Train the model
+        # Implement cross-validation for more reliable metrics
+        from sklearn.model_selection import cross_val_score
+        logger.info(f"Performing 5-fold cross-validation")
+        cv_scores = cross_val_score(pipeline, X, y, cv=5, scoring='accuracy')
+        cv_accuracy = np.mean(cv_scores)
+        cv_std = np.std(cv_scores)
+        logger.info(f"Cross-validation accuracy: {cv_accuracy:.4f} ± {cv_std:.4f}")
+
+        # Train the model on the full training set
         logger.info(f"Training {request.algorithm} model")
         pipeline.fit(X_train, y_train)
         logger.info("Model training completed")
@@ -322,24 +399,55 @@ async def train_model(
         y_pred = pipeline.predict(X_test)
         y_pred_proba = pipeline.predict_proba(X_test)
 
-        # Calculate metrics
+        # Calculate comprehensive metrics
         metrics = {
             "accuracy": float(accuracy_score(y_test, y_pred)),
-            "precision": float(precision_score(y_test, y_pred, average='weighted')),
-            "recall": float(recall_score(y_test, y_pred, average='weighted')),
-            "f1": float(f1_score(y_test, y_pred, average='weighted'))
+            "cv_accuracy": float(cv_accuracy),
+            "cv_std": float(cv_std),
+            "precision": float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
+            "recall": float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
+            "f1": float(f1_score(y_test, y_pred, average='weighted', zero_division=0))
         }
 
         # Add ROC AUC if it's a binary classification
         if len(np.unique(y)) == 2:
             try:
                 metrics["roc_auc"] = float(roc_auc_score(y_test, y_pred_proba[:, 1]))
-            except ValueError as e:
+            except (ValueError, IndexError) as e:
                 logger.warning(f"ROC AUC not defined: {str(e)}")
                 metrics["roc_auc"] = None
 
+        # Check for severe overfitting
+        train_acc = accuracy_score(y_train, pipeline.predict(X_train))
+        test_acc = metrics["accuracy"]
+        overfitting_ratio = train_acc / max(test_acc, 0.001)  # Avoid division by zero
+
+        if overfitting_ratio > 1.2:
+            logger.warning(f"Model may be overfitting: train accuracy={train_acc:.4f}, test accuracy={test_acc:.4f}")
+            metrics["overfitting_warning"] = True
+            metrics["overfitting_ratio"] = float(overfitting_ratio)
+        else:
+            metrics["overfitting_warning"] = False
+            metrics["overfitting_ratio"] = float(overfitting_ratio)
+
+        # Add feature importances if available
+        if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
+            # Get feature names after preprocessing (if possible)
+            feature_importances = pipeline.named_steps['classifier'].feature_importances_
+
+            # For simplicity, we'll just use the top features
+            if len(feature_importances) == len(feature_names):
+                # Create a dictionary of feature importance
+                importance_dict = dict(zip(feature_names, feature_importances))
+                # Sort by importance
+                sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                # Get top 10 features
+                top_features = sorted_features[:10]
+                metrics["top_features"] = {str(k): float(v) for k, v in top_features}
+
         # Convert all metric values to float or None
-        metrics = {k: (float(v) if v is not None else None) for k, v in metrics.items()}
+        metrics = {k: (float(v) if v is not None and not isinstance(v, bool) and not isinstance(v, dict) else v) 
+                  for k, v in metrics.items()}
 
         logger.info(f"Model metrics: {metrics}")
 
@@ -360,7 +468,8 @@ async def train_model(
             'algorithm': request.algorithm,
             'trained_at': datetime.now().isoformat(),
             'target_classes': list(pipeline.classes_),
-            'metrics': metrics
+            'metrics': metrics,
+            'cv_scores': cv_scores.tolist()
         }
 
         joblib.dump(model_data, model_path)
