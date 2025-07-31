@@ -6,8 +6,6 @@
   },
   "deploy": {
     "startCommand": "uvicorn ml_backend:app --host=0.0.0.0 --port=8000",
-    "healthcheckPath": "/health",
-    "healthcheckTimeout": 180,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }
