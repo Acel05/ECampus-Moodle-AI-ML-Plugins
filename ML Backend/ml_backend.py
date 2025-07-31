@@ -12,6 +12,7 @@ import logging
 import traceback
 import tempfile
 import shutil
+import platform
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Union
 
@@ -74,19 +75,27 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 # Models cache
 MODEL_CACHE = {}
 
+class TrainRequest(BaseModel):
+    courseid: int
+    algorithm: str
+    target_column: str
+    id_columns: List[str] = []
+    test_size: float = 0.2
+
 # Pydantic models for requests and responses
 class TrainResponse(BaseModel):
     model_id: str
     algorithm: str
-    metrics: Dict[str, Any]  # Changed from Dict[str, Optional[float]] to allow any type
+    metrics: Dict[str, Any]
     feature_names: List[str]
     target_classes: List[Any]
     trained_at: str
     training_time_seconds: float
     model_path: Optional[str] = None
+    top_features: Optional[Dict[str, float]] = None
 
     class Config:
-        arbitrary_types_allowed = True  # Add this to allow arbitrary types
+        arbitrary_types_allowed = True
 
 class PredictRequest(BaseModel):
     model_id: str
@@ -101,12 +110,18 @@ class PredictResponse(BaseModel):
 
 # API key verification
 async def verify_api_key(x_api_key: str = Header(...)):
-    if x_api_key != API_KEY:
+    provided_key = x_api_key
+    expected_key = API_KEY
+
+    logger.info(f"API key verification - provided length: {len(provided_key) if provided_key else 0}, expected length: {len(expected_key) if expected_key else 0}")
+
+    if provided_key != expected_key:
+        logger.warning(f"API key validation failed")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key"
         )
-    return x_api_key
+    return provided_key
 
 # Exception handler
 @app.exception_handler(Exception)
@@ -439,7 +454,7 @@ async def train_model(
             'target_classes': list(pipeline.classes_),
             'metrics': metrics,
             'cv_scores': cv_scores.tolist(),
-            'top_features': top_features_dict  # Store separately here too
+            'top_features': top_features_dict
         }
 
         joblib.dump(model_data, model_path)
@@ -453,13 +468,13 @@ async def train_model(
         return {
             "model_id": model_id,
             "algorithm": request.algorithm,
-            "metrics": metrics,  # This now contains only numeric metrics
+            "metrics": metrics,
             "feature_names": [str(f) for f in feature_names],
             "target_classes": [int(c) if isinstance(c, (np.integer, np.int64, np.int32)) else c for c in pipeline.classes_],
             "trained_at": datetime.now().isoformat(),
             "training_time_seconds": training_time,
-            "model_path": model_path,  # Added model path for the Moodle plugin
-            "top_features": top_features_dict  # Add as a separate field in the response
+            "model_path": model_path,
+            "top_features": top_features_dict
         }
 
     except HTTPException:
@@ -471,27 +486,15 @@ async def train_model(
             detail=f"Error training model: {str(e)}"
         )
 
-@app.post("/predict", dependencies=[Depends(verify_api_key)])
-async def predict(request: dict):
+@app.post("/predict", response_model=PredictResponse, dependencies=[Depends(verify_api_key)])
+async def predict(request: PredictRequest):
     """
     Make a prediction using a trained model.
     Support both single and batch predictions.
     """
     try:
-        model_id = request.get("model_id")
-        features = request.get("features")
-
-        if not model_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="model_id is required"
-            )
-
-        if not features:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="features are required"
-            )
+        model_id = request.model_id
+        features = request.features
 
         # Check if features is a list of lists/dicts (batch) or just a single list/dict
         is_batch = isinstance(features, list) and len(features) > 0 and isinstance(features[0], (list, dict))
@@ -513,15 +516,25 @@ async def predict(request: dict):
                     if file == f"{model_id}.joblib":
                         model_path = os.path.join(root, file)
                         logger.info(f"Loading model from {model_path}")
-                        model_data = joblib.load(model_path)
-                        MODEL_CACHE[model_id] = model_data
-                        found = True
-                        break
+                        try:
+                            model_data = joblib.load(model_path)
+                            MODEL_CACHE[model_id] = model_data
+                            found = True
+                            break
+                        except Exception as e:
+                            logger.error(f"Error loading model from {model_path}: {str(e)}")
                 if found:
                     break
 
             if not found:
-                logger.error(f"Model with ID {model_id} not found")
+                logger.error(f"Model with ID {model_id} not found. Available models directory: {MODELS_DIR}")
+                # List all model files found
+                model_files = []
+                for root, dirs, files in os.walk(MODELS_DIR):
+                    for file in files:
+                        if file.endswith('.joblib'):
+                            model_files.append(os.path.join(root, file))
+                logger.error(f"Available model files: {model_files}")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Model with ID {model_id} not found"
@@ -658,6 +671,9 @@ if __name__ == "__main__":
     debug = os.getenv("DEBUG", "false").lower() == "true"
 
     logger.info(f"Starting Student Performance Prediction API on port {port}, debug={debug}")
+    logger.info(f"Python version: {platform.python_version()}")
+    logger.info(f"Operating system: {platform.system()} {platform.release()}")
     logger.info(f"Models directory: {MODELS_DIR}")
+    logger.info(f"Environment variables: PORT={os.getenv('PORT')}, DEBUG={os.getenv('DEBUG')}")
 
     uvicorn.run(app, host="0.0.0.0", port=port)
