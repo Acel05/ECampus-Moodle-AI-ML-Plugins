@@ -75,16 +75,18 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 MODEL_CACHE = {}
 
 # Pydantic models for requests and responses
-class TrainRequest(BaseModel):
-    courseid: int
-    algorithm: str = "randomforest"  # Default to RandomForest
-    target_column: str = "final_outcome"
-    id_columns: List[str] = []
-    test_size: float = 0.2
+class TrainResponse(BaseModel):
+    model_id: str
+    algorithm: str
+    metrics: Dict[str, Any]  # Changed from Dict[str, Optional[float]] to allow any type
+    feature_names: List[str]
+    target_classes: List[Any]
+    trained_at: str
+    training_time_seconds: float
+    model_path: Optional[str] = None
 
     class Config:
-        # Allow arbitrary types for field values
-        arbitrary_types_allowed = True
+        arbitrary_types_allowed = True  # Add this to allow arbitrary types
 
 class TrainResponse(BaseModel):
     model_id: str
@@ -443,7 +445,7 @@ async def train_model(
                 sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
                 # Get top 10 features
                 top_features = sorted_features[:10]
-                metrics["top_features"] = {str(k): float(v) for k, v in top_features}
+                top_features_dict = {str(k): float(v) for k, v in top_features}
 
         # Convert all metric values to float or None
         metrics = {k: (float(v) if v is not None and not isinstance(v, bool) and not isinstance(v, dict) else v) 
@@ -469,7 +471,8 @@ async def train_model(
             'trained_at': datetime.now().isoformat(),
             'target_classes': list(pipeline.classes_),
             'metrics': metrics,
-            'cv_scores': cv_scores.tolist()
+            'cv_scores': cv_scores.tolist(),
+            'top_features': top_features_dict  # Store separately here too
         }
 
         joblib.dump(model_data, model_path)
@@ -483,12 +486,13 @@ async def train_model(
         return {
             "model_id": model_id,
             "algorithm": request.algorithm,
-            "metrics": metrics,
+            "metrics": metrics,  # This now contains only numeric metrics
             "feature_names": [str(f) for f in feature_names],
             "target_classes": [int(c) if isinstance(c, (np.integer, np.int64, np.int32)) else c for c in pipeline.classes_],
             "trained_at": datetime.now().isoformat(),
             "training_time_seconds": training_time,
-            "model_path": model_path  # Added model path for the Moodle plugin
+            "model_path": model_path,  # Added model path for the Moodle plugin
+            "top_features": top_features_dict  # Add as a separate field in the response
         }
 
     except HTTPException:
