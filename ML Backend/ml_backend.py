@@ -88,16 +88,6 @@ class TrainResponse(BaseModel):
     class Config:
         arbitrary_types_allowed = True  # Add this to allow arbitrary types
 
-class TrainResponse(BaseModel):
-    model_id: str
-    algorithm: str
-    metrics: Dict[str, Optional[float]]  # Allow None for metrics like roc_auc
-    feature_names: List[str]
-    target_classes: List[Any]
-    trained_at: str
-    training_time_seconds: float
-    model_path: Optional[str] = None
-
 class PredictRequest(BaseModel):
     model_id: str
     features: Dict[str, Any]
@@ -143,38 +133,12 @@ async def handle_exception(request: Request, exc: Exception):
 # Simple health check endpoint
 @app.get("/health")
 async def health_check():
-    """
-    Health check endpoint for monitoring.
-    """
-    try:
-        # Check models directory exists
-        if not os.path.exists(MODELS_DIR):
-            os.makedirs(MODELS_DIR, exist_ok=True)
-
-        # Check if we can write to the models directory
-        test_file = os.path.join(MODELS_DIR, "healthcheck.txt")
-        with open(test_file, "w") as f:
-            f.write("Health check")
-        os.remove(test_file)
-
-        return {
-            "status": "healthy",
-            "time": datetime.now().isoformat(),
-            "version": "1.0.0",
-            "models_dir": MODELS_DIR,
-            "models_count": len([f for f in os.listdir(MODELS_DIR) if f.endswith('.joblib')]),
-            "environment": {
-                "debug": os.getenv("DEBUG", "false"),
-                "api_key_configured": API_KEY != "changeme"
-            }
-        }
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "time": datetime.now().isoformat()
-        }
+    """Simple health check endpoint for monitoring."""
+    return {
+        "status": "healthy",
+        "time": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
 
 @app.post("/train", response_model=TrainResponse, dependencies=[Depends(verify_api_key)])
 async def train_model(
@@ -431,6 +395,9 @@ async def train_model(
         else:
             metrics["overfitting_warning"] = False
             metrics["overfitting_ratio"] = float(overfitting_ratio)
+
+        # Initialize as empty by default
+        top_features_dict = {}
 
         # Add feature importances if available
         if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
@@ -690,6 +657,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     debug = os.getenv("DEBUG", "false").lower() == "true"
 
-    print(f"Starting Student Performance Prediction API on port {port}, debug={debug}")
+    logger.info(f"Starting Student Performance Prediction API on port {port}, debug={debug}")
+    logger.info(f"Models directory: {MODELS_DIR}")
 
     uvicorn.run(app, host="0.0.0.0", port=port)
