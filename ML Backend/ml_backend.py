@@ -31,12 +31,37 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import (
+    RandomForestClassifier, 
+    GradientBoostingClassifier, 
+    AdaBoostClassifier, 
+    ExtraTreesClassifier
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.impute import SimpleImputer
+
+# Import advanced algorithms
+try:
+    from catboost import CatBoostClassifier
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
+
+try:
+    from xgboost import XGBClassifier
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+
+try:
+    import lightgbm as lgb
+    from lightgbm import LGBMClassifier
+    LIGHTGBM_AVAILABLE = True
+except ImportError:
+    LIGHTGBM_AVAILABLE = False
 
 # Load environment variables
 load_dotenv()
@@ -74,16 +99,31 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 # Models cache
 MODEL_CACHE = {}
 
-# Pydantic models for responses
+# Pydantic models for requests and responses
+class TrainRequest(BaseModel):
+    courseid: int
+    algorithm: str = "randomforest"  # Default to RandomForest
+    target_column: str = "final_outcome"
+    id_columns: List[str] = []
+    test_size: float = 0.2
+
+    class Config:
+        # Allow arbitrary types for field values
+        arbitrary_types_allowed = True
+
 class TrainResponse(BaseModel):
     model_id: str
     algorithm: str
-    metrics: Dict[str, Any]  # Use Any to handle both floats and nested dictionaries
+    metrics: Dict[str, Optional[float]]  # Allow None for metrics like roc_auc
     feature_names: List[str]
     target_classes: List[Any]
     trained_at: str
     training_time_seconds: float
     model_path: Optional[str] = None
+
+class PredictRequest(BaseModel):
+    model_id: str
+    features: Dict[str, Any]
 
 class PredictResponse(BaseModel):
     prediction: Any
@@ -149,6 +189,11 @@ async def health_check():
             "environment": {
                 "debug": os.getenv("DEBUG", "false"),
                 "api_key_configured": API_KEY != "changeme"
+            },
+            "algorithms": {
+                "catboost": CATBOOST_AVAILABLE,
+                "xgboost": XGBOOST_AVAILABLE,
+                "lightgbm": LIGHTGBM_AVAILABLE
             }
         }
     except Exception as e:
@@ -186,14 +231,14 @@ async def train_model(
 
         logger.info(f"Uploaded dataset saved to temporary file: {temp_filepath}")
 
-        # Create a dictionary with the form data
-        request_data = {
-            "courseid": courseid,
-            "algorithm": algorithm,
-            "target_column": target_column,
-            "id_columns": id_columns_list,
-            "test_size": test_size
-        }
+        # Create a request object with the form data
+        request = TrainRequest(
+            courseid=courseid,
+            algorithm=algorithm,
+            target_column=target_column,
+            id_columns=id_columns_list,
+            test_size=test_size
+        )
 
         # Load data
         file_extension = os.path.splitext(dataset_file.filename)[1].lower()
@@ -226,22 +271,22 @@ async def train_model(
             logger.warning(f"Very small dataset with only {len(df)} samples. Model may not be reliable.")
 
         # Use a default target column if not found
-        if request_data["target_column"] not in df.columns:
+        if request.target_column not in df.columns:
             # Look for common target column names
             possible_targets = ['final_outcome', 'pass', 'outcome', 'grade', 'result', 'status']
             for col in possible_targets:
                 if col in df.columns:
-                    logger.info(f"Using '{col}' as target column instead of '{request_data['target_column']}'")
-                    request_data["target_column"] = col
+                    logger.info(f"Using '{col}' as target column instead of '{request.target_column}'")
+                    request.target_column = col
                     break
             else:
                 # Use the last column as target if none found
-                request_data["target_column"] = df.columns[-1]
-                logger.warning(f"Target column not found, using last column '{request_data['target_column']}' as target")
+                request.target_column = df.columns[-1]
+                logger.warning(f"Target column not found, using last column '{request.target_column}' as target")
 
         # Extract target and features
-        y = df[request_data["target_column"]]
-        X = df.drop(columns=[request_data["target_column"]] + request_data["id_columns"])
+        y = df[request.target_column]
+        X = df.drop(columns=[request.target_column] + request.id_columns)
         feature_names = X.columns.tolist()
 
         logger.info(f"Features: {feature_names}")
@@ -292,17 +337,17 @@ async def train_model(
         # Split data with stratification for better class balance
         try:
             X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=request_data["test_size"], random_state=42, stratify=y
+                X, y, test_size=request.test_size, random_state=42, stratify=y
             )
         except ValueError:
             # If stratification fails (e.g., with only one class), fall back to standard split
             logger.warning("Stratified split failed, falling back to random split")
             X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=request_data["test_size"], random_state=42
+                X, y, test_size=request.test_size, random_state=42
             )
 
         # Select algorithm with proper regularization to prevent overfitting
-        if request_data["algorithm"] == 'randomforest':
+        if request.algorithm == 'randomforest':
             # Use fewer trees and limit depth to prevent overfitting
             model = RandomForestClassifier(
                 n_estimators=100, 
@@ -312,7 +357,49 @@ async def train_model(
                 class_weight=class_weight,
                 random_state=42
             )
-        elif request_data["algorithm"] == 'logisticregression':
+        elif request.algorithm == 'catboost' and CATBOOST_AVAILABLE:
+            model = CatBoostClassifier(
+                iterations=100,
+                learning_rate=0.1,
+                depth=6,
+                loss_function='Logloss',
+                random_seed=42,
+                verbose=0  # Disable verbose output
+            )
+        elif request.algorithm == 'xgboost' and XGBOOST_AVAILABLE:
+            model = XGBClassifier(
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=6,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42
+            )
+        elif request.algorithm == 'lightgbm' and LIGHTGBM_AVAILABLE:
+            model = LGBMClassifier(
+                n_estimators=100,
+                learning_rate=0.1,
+                max_depth=6,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42
+            )
+        elif request.algorithm == 'adaboost':
+            model = AdaBoostClassifier(
+                n_estimators=50,
+                learning_rate=0.1,
+                random_state=42
+            )
+        elif request.algorithm == 'extratrees':
+            model = ExtraTreesClassifier(
+                n_estimators=100,
+                max_depth=10,
+                min_samples_split=5,
+                min_samples_leaf=2,
+                class_weight=class_weight,
+                random_state=42
+            )
+        elif request.algorithm == 'logisticregression':
             # Add L2 regularization
             model = LogisticRegression(
                 C=1.0,  # Inverse of regularization strength
@@ -320,7 +407,7 @@ async def train_model(
                 max_iter=1000, 
                 random_state=42
             )
-        elif request_data["algorithm"] == 'gradientboosting':
+        elif request.algorithm == 'gradientboosting':
             model = GradientBoostingClassifier(
                 n_estimators=100,
                 learning_rate=0.1,
@@ -328,7 +415,7 @@ async def train_model(
                 subsample=0.8,  # Use 80% of samples per tree
                 random_state=42
             )
-        elif request_data["algorithm"] == 'svm':
+        elif request.algorithm == 'svm':
             model = SVC(
                 C=1.0,
                 kernel='rbf',
@@ -336,7 +423,7 @@ async def train_model(
                 probability=True, 
                 random_state=42
             )
-        elif request_data["algorithm"] == 'decisiontree':
+        elif request.algorithm == 'decisiontree':
             model = DecisionTreeClassifier(
                 max_depth=5,  # Limit depth
                 min_samples_split=5,
@@ -344,13 +431,14 @@ async def train_model(
                 class_weight=class_weight,
                 random_state=42
             )
-        elif request_data["algorithm"] == 'knn':
+        elif request.algorithm == 'knn':
             model = KNeighborsClassifier(
                 n_neighbors=5,
                 weights='distance'  # Weight by distance for better performance
             )
         else:
-            logger.warning(f"Unsupported algorithm '{request_data['algorithm']}', falling back to RandomForest")
+            # If an unsupported algorithm was requested, log a warning and fall back to RandomForest
+            logger.warning(f"Unsupported algorithm '{request.algorithm}', falling back to RandomForest")
             model = RandomForestClassifier(
                 n_estimators=100,
                 max_depth=10,
@@ -359,7 +447,7 @@ async def train_model(
                 class_weight=class_weight,
                 random_state=42
             )
-            request_data["algorithm"] = 'randomforest'
+            request.algorithm = 'randomforest'
 
         # Create pipeline
         pipeline = Pipeline([
@@ -376,7 +464,7 @@ async def train_model(
         logger.info(f"Cross-validation accuracy: {cv_accuracy:.4f} ± {cv_std:.4f}")
 
         # Train the model on the full training set
-        logger.info(f"Training {request_data['algorithm']} model")
+        logger.info(f"Training {request.algorithm} model")
         pipeline.fit(X_train, y_train)
         logger.info("Model training completed")
 
@@ -428,14 +516,19 @@ async def train_model(
                 sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
                 # Get top 10 features
                 top_features = sorted_features[:10]
-                # Store feature importances as separate nested dictionary
                 metrics["top_features"] = {str(k): float(v) for k, v in top_features}
+
+        # Convert all metric values to float or None
+        metrics = {k: (float(v) if v is not None and not isinstance(v, bool) and not isinstance(v, dict) else v) 
+                  for k, v in metrics.items()}
+
+        logger.info(f"Model metrics: {metrics}")
 
         # Generate model ID
         model_id = str(uuid.uuid4())
 
         # Create course directory
-        course_models_dir = os.path.join(MODELS_DIR, f"course_{request_data['courseid']}")
+        course_models_dir = os.path.join(MODELS_DIR, f"course_{request.courseid}")
         os.makedirs(course_models_dir, exist_ok=True)
 
         # Save model
@@ -445,7 +538,7 @@ async def train_model(
         model_data = {
             'pipeline': pipeline,
             'feature_names': feature_names,
-            'algorithm': request_data["algorithm"],
+            'algorithm': request.algorithm,
             'trained_at': datetime.now().isoformat(),
             'target_classes': list(pipeline.classes_),
             'metrics': metrics,
@@ -462,7 +555,7 @@ async def train_model(
 
         return {
             "model_id": model_id,
-            "algorithm": request_data["algorithm"],
+            "algorithm": request.algorithm,
             "metrics": metrics,
             "feature_names": [str(f) for f in feature_names],
             "target_classes": [int(c) if isinstance(c, (np.integer, np.int64, np.int32)) else c for c in pipeline.classes_],
@@ -479,7 +572,7 @@ async def train_model(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error training model: {str(e)}"
         )
-
+        
 @app.post("/predict", dependencies=[Depends(verify_api_key)])
 async def predict(request: dict):
     """
