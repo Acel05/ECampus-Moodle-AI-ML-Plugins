@@ -29,8 +29,8 @@ from dotenv import load_dotenv
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
@@ -316,22 +316,21 @@ async def train_model(
                 X, y, test_size=request.test_size, random_state=42
             )
 
-        # Set hyperparameters based on algorithm - with different configurations for each algorithm
+        # Select algorithm with proper regularization to prevent overfitting
         if request.algorithm == 'randomforest':
-            # Use moderate parameter settings to prevent extreme overfitting
+            # Use fewer trees and limit depth to prevent overfitting
             model = RandomForestClassifier(
-                n_estimators=100,
-                max_depth=5,  # More limited depth to prevent overfitting
-                min_samples_split=5,
-                min_samples_leaf=4,   # Higher min samples in leaves to prevent overfitting
+                n_estimators=100, 
+                max_depth=10,  # Limit depth
+                min_samples_split=5,  # Require more samples to split
+                min_samples_leaf=2,   # Require more samples in leaves
                 class_weight=class_weight,
                 random_state=42
             )
         elif request.algorithm == 'logisticregression':
-            # Add stronger regularization
+            # Add L2 regularization
             model = LogisticRegression(
-                C=0.8,  # Stronger regularization than default
-                solver='liblinear',  # Better for small datasets
+                C=1.0,  # Inverse of regularization strength
                 class_weight=class_weight,
                 max_iter=1000, 
                 random_state=42
@@ -339,42 +338,39 @@ async def train_model(
         elif request.algorithm == 'gradientboosting':
             model = GradientBoostingClassifier(
                 n_estimators=100,
-                learning_rate=0.05,  # Lower learning rate to prevent overfitting
-                max_depth=3,
-                subsample=0.8,
+                learning_rate=0.1,
+                max_depth=3,  # Shallow trees to prevent overfitting
+                subsample=0.8,  # Use 80% of samples per tree
                 random_state=42
             )
         elif request.algorithm == 'svm':
             model = SVC(
                 C=1.0,
                 kernel='rbf',
-                gamma='scale',  # Better default
                 class_weight=class_weight,
                 probability=True, 
                 random_state=42
             )
         elif request.algorithm == 'decisiontree':
             model = DecisionTreeClassifier(
-                max_depth=4,  # More limited depth
+                max_depth=5,  # Limit depth
                 min_samples_split=5,
-                min_samples_leaf=4,  # Require more samples per leaf
+                min_samples_leaf=2,
                 class_weight=class_weight,
                 random_state=42
             )
         elif request.algorithm == 'knn':
-            # KNN parameters optimized for small/medium datasets
             model = KNeighborsClassifier(
-                n_neighbors=min(5, len(X_train) // 5) if len(X_train) > 5 else 3,  # Adapt to dataset size
-                weights='distance',
-                p=2  # Euclidean distance
+                n_neighbors=5,
+                weights='distance'  # Weight by distance for better performance
             )
         else:
             logger.warning(f"Unsupported algorithm '{request.algorithm}', falling back to RandomForest")
             model = RandomForestClassifier(
                 n_estimators=100,
-                max_depth=5,
+                max_depth=10,
                 min_samples_split=5,
-                min_samples_leaf=4,
+                min_samples_leaf=2,
                 class_weight=class_weight,
                 random_state=42
             )
@@ -386,108 +382,74 @@ async def train_model(
             ('classifier', model)
         ])
 
-        # FIXED: Proper cross-validation on the training set only
-        # This prevents information leakage and gives a more realistic assessment
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        logger.info(f"Performing 5-fold cross-validation on training data only")
-
-        # Apply cross-validation on training data only
-        cv_pipeline = Pipeline([
-            ('preprocessor', preprocessor),
-            ('classifier', model)
-        ])
-
-        try:
-            cv_scores = cross_val_score(cv_pipeline, X_train, y_train, cv=cv, scoring='accuracy')
-            cv_accuracy = np.mean(cv_scores)
-            cv_std = np.std(cv_scores)
-            logger.info(f"Cross-validation accuracy on training data: {cv_accuracy:.4f} ± {cv_std:.4f}")
-        except Exception as e:
-            logger.warning(f"Cross-validation failed: {e}. Using simple train/test split.")
-            cv_scores = np.array([0.0])
-            cv_accuracy = 0.0
-            cv_std = 0.0
+        # Implement cross-validation for more reliable metrics
+        from sklearn.model_selection import cross_val_score
+        logger.info(f"Performing 5-fold cross-validation")
+        cv_scores = cross_val_score(pipeline, X, y, cv=5, scoring='accuracy')
+        cv_accuracy = np.mean(cv_scores)
+        cv_std = np.std(cv_scores)
+        logger.info(f"Cross-validation accuracy: {cv_accuracy:.4f} ± {cv_std:.4f}")
 
         # Train the model on the full training set
         logger.info(f"Training {request.algorithm} model")
         pipeline.fit(X_train, y_train)
         logger.info("Model training completed")
 
-        # Evaluate on test set
+        # Evaluate
         y_pred = pipeline.predict(X_test)
-        test_accuracy = accuracy_score(y_test, y_pred)
-        logger.info(f"Test accuracy: {test_accuracy:.4f}")
+        y_pred_proba = pipeline.predict_proba(X_test)
 
-        # Also evaluate on train set to check for overfitting
-        y_train_pred = pipeline.predict(X_train)
-        train_accuracy = accuracy_score(y_train, y_train_pred)
-        logger.info(f"Train accuracy: {train_accuracy:.4f}")
-
-        # Get prediction probabilities if available
-        try:
-            y_pred_proba = pipeline.predict_proba(X_test)
-        except:
-            y_pred_proba = None
-            logger.warning("Could not get prediction probabilities")
-
-        # Calculate comprehensive metrics - SIMPLIFY FOR API COMPATIBILITY
+        # Calculate comprehensive metrics
         metrics = {
-            "accuracy": float(test_accuracy),
-            "train_accuracy": float(train_accuracy),
+            "accuracy": float(accuracy_score(y_test, y_pred)),
             "cv_accuracy": float(cv_accuracy),
-            "cv_std": float(cv_std)
+            "cv_std": float(cv_std),
+            "precision": float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
+            "recall": float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
+            "f1": float(f1_score(y_test, y_pred, average='weighted', zero_division=0))
         }
 
-        # Add precision, recall, and F1 with proper handling for different class scenarios
-        try:
-            metrics["precision"] = float(precision_score(y_test, y_pred, average='weighted', zero_division=0))
-            metrics["recall"] = float(recall_score(y_test, y_pred, average='weighted', zero_division=0))
-            metrics["f1"] = float(f1_score(y_test, y_pred, average='weighted', zero_division=0))
-        except Exception as e:
-            logger.warning(f"Error calculating precision/recall metrics: {e}")
-            metrics["precision"] = None
-            metrics["recall"] = None
-            metrics["f1"] = None
-
-        # Add ROC AUC if it's a binary classification and we have probabilities
-        if len(np.unique(y)) == 2 and y_pred_proba is not None:
+        # Add ROC AUC if it's a binary classification
+        if len(np.unique(y)) == 2:
             try:
                 metrics["roc_auc"] = float(roc_auc_score(y_test, y_pred_proba[:, 1]))
             except (ValueError, IndexError) as e:
                 logger.warning(f"ROC AUC not defined: {str(e)}")
                 metrics["roc_auc"] = None
 
-        # Check for overfitting - now with a clearer threshold for detection
-        overfitting_ratio = train_accuracy / max(test_accuracy, 0.001)  # Avoid division by zero
+        # Check for severe overfitting
+        train_acc = accuracy_score(y_train, pipeline.predict(X_train))
+        test_acc = metrics["accuracy"]
+        overfitting_ratio = train_acc / max(test_acc, 0.001)  # Avoid division by zero
 
-        # More sophisticated overfitting detection
-        metrics["overfitting_warning"] = bool(overfitting_ratio > 1.3)  # Convert to bool for serialization
-        metrics["overfitting_ratio"] = float(overfitting_ratio)
+        if overfitting_ratio > 1.2:
+            logger.warning(f"Model may be overfitting: train accuracy={train_acc:.4f}, test accuracy={test_acc:.4f}")
+            metrics["overfitting_warning"] = True
+            metrics["overfitting_ratio"] = float(overfitting_ratio)
+        else:
+            metrics["overfitting_warning"] = False
+            metrics["overfitting_ratio"] = float(overfitting_ratio)
 
-        # Add feature importances - SIMPLIFY FOR API COMPATIBILITY
+        # Add feature importances if available
         if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
-            # Extract feature importances from tree-based models
+            # Get feature names after preprocessing (if possible)
             feature_importances = pipeline.named_steps['classifier'].feature_importances_
 
-            # Create a dictionary of feature importances (limit to 10 for simplicity)
-            feature_dict = {}
-            for i, feature in enumerate(feature_names):
-                if i < len(feature_importances) and i < 10:  # Limit to avoid huge responses
-                    feature_dict[feature] = float(feature_importances[i])
+            # For simplicity, we'll just use the top features
+            if len(feature_importances) == len(feature_names):
+                # Create a dictionary of feature importance
+                importance_dict = dict(zip(feature_names, feature_importances))
+                # Sort by importance
+                sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                # Get top 10 features
+                top_features = sorted_features[:10]
+                metrics["top_features"] = {str(k): float(v) for k, v in top_features}
 
-            metrics["top_features"] = feature_dict
+        # Convert all metric values to float or None
+        metrics = {k: (float(v) if v is not None and not isinstance(v, bool) and not isinstance(v, dict) else v) 
+                  for k, v in metrics.items()}
 
-        elif hasattr(pipeline.named_steps['classifier'], 'coef_') and request.algorithm == 'logisticregression':
-            # For logistic regression, extract coefficients
-            coefficients = pipeline.named_steps['classifier'].coef_[0]
-
-            # Create a dictionary of coefficient importances (limit to 10)
-            coef_dict = {}
-            for i, feature in enumerate(feature_names):
-                if i < len(coefficients) and i < 10:  # Limit to avoid huge responses
-                    coef_dict[feature] = float(abs(coefficients[i]))  # Use absolute value for importance
-
-            metrics["top_features"] = coef_dict
+        logger.info(f"Model metrics: {metrics}")
 
         # Generate model ID
         model_id = str(uuid.uuid4())
@@ -518,28 +480,15 @@ async def train_model(
         training_time = time.time() - start_time
         logger.info(f"Training completed in {training_time:.2f} seconds")
 
-        # Clean metrics for serialization (simpler format for compatibility)
-        serializable_metrics = {}
-        for key, value in metrics.items():
-            if isinstance(value, dict):
-                # For nested dictionaries like top_features, ensure all values are primitive types
-                serializable_metrics[key] = {str(k): float(v) for k, v in value.items()}
-            elif isinstance(value, (np.floating, float, int, np.integer, bool)):
-                serializable_metrics[key] = float(value) if not isinstance(value, bool) else value
-            else:
-                # Skip complex objects that can't be easily serialized
-                continue
-
-        # Return a simplified response for API compatibility
         return {
             "model_id": model_id,
             "algorithm": request.algorithm,
-            "metrics": serializable_metrics,
+            "metrics": metrics,
             "feature_names": [str(f) for f in feature_names],
             "target_classes": [int(c) if isinstance(c, (np.integer, np.int64, np.int32)) else c for c in pipeline.classes_],
             "trained_at": datetime.now().isoformat(),
             "training_time_seconds": training_time,
-            "model_path": model_path
+            "model_path": model_path  # Added model path for the Moodle plugin
         }
 
     except HTTPException:
@@ -550,16 +499,28 @@ async def train_model(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error training model: {str(e)}"
         )
-        
-@app.post("/predict", response_model=PredictResponse, dependencies=[Depends(verify_api_key)])
-async def predict(request: PredictRequest):
+
+@app.post("/predict", dependencies=[Depends(verify_api_key)])
+async def predict(request: dict):
     """
     Make a prediction using a trained model.
     Support both single and batch predictions.
     """
     try:
-        model_id = request.model_id
-        features = request.features
+        model_id = request.get("model_id")
+        features = request.get("features")
+
+        if not model_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="model_id is required"
+            )
+
+        if not features:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="features are required"
+            )
 
         # Check if features is a list of lists/dicts (batch) or just a single list/dict
         is_batch = isinstance(features, list) and len(features) > 0 and isinstance(features[0], (list, dict))
@@ -581,25 +542,15 @@ async def predict(request: PredictRequest):
                     if file == f"{model_id}.joblib":
                         model_path = os.path.join(root, file)
                         logger.info(f"Loading model from {model_path}")
-                        try:
-                            model_data = joblib.load(model_path)
-                            MODEL_CACHE[model_id] = model_data
-                            found = True
-                            break
-                        except Exception as e:
-                            logger.error(f"Error loading model from {model_path}: {str(e)}")
+                        model_data = joblib.load(model_path)
+                        MODEL_CACHE[model_id] = model_data
+                        found = True
+                        break
                 if found:
                     break
 
             if not found:
-                logger.error(f"Model with ID {model_id} not found. Available models directory: {MODELS_DIR}")
-                # List all model files found
-                model_files = []
-                for root, dirs, files in os.walk(MODELS_DIR):
-                    for file in files:
-                        if file.endswith('.joblib'):
-                            model_files.append(os.path.join(root, file))
-                logger.error(f"Available model files: {model_files}")
+                logger.error(f"Model with ID {model_id} not found")
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Model with ID {model_id} not found"
@@ -735,10 +686,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     debug = os.getenv("DEBUG", "false").lower() == "true"
 
-    logger.info(f"Starting Student Performance Prediction API on port {port}, debug={debug}")
-    logger.info(f"Python version: {platform.python_version()}")
-    logger.info(f"Operating system: {platform.system()} {platform.release()}")
-    logger.info(f"Models directory: {MODELS_DIR}")
-    logger.info(f"Environment variables: PORT={os.getenv('PORT')}, DEBUG={os.getenv('DEBUG')}")
+    print(f"Starting Student Performance Prediction API on port {port}, debug={debug}")
 
     uvicorn.run(app, host="0.0.0.0", port=port)
