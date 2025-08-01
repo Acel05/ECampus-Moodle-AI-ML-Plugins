@@ -430,26 +430,12 @@ async def train_model(
             y_pred_proba = None
             logger.warning("Could not get prediction probabilities")
 
-        # Calculate confusion matrix for test set
-        try:
-            cm = confusion_matrix(y_test, y_pred)
-            cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-            confusion_matrix_data = {
-                "matrix": cm.tolist(),
-                "normalized": cm_normalized.tolist(),
-                "classes": [str(c) for c in np.unique(y)]
-            }
-        except Exception as e:
-            logger.warning(f"Could not calculate confusion matrix: {e}")
-            confusion_matrix_data = None
-
-        # Calculate comprehensive metrics
+        # Calculate comprehensive metrics - SIMPLIFY FOR API COMPATIBILITY
         metrics = {
             "accuracy": float(test_accuracy),
             "train_accuracy": float(train_accuracy),
             "cv_accuracy": float(cv_accuracy),
-            "cv_std": float(cv_std),
-            "confusion_matrix": confusion_matrix_data
+            "cv_std": float(cv_std)
         }
 
         # Add precision, recall, and F1 with proper handling for different class scenarios
@@ -475,77 +461,33 @@ async def train_model(
         overfitting_ratio = train_accuracy / max(test_accuracy, 0.001)  # Avoid division by zero
 
         # More sophisticated overfitting detection
-        metrics["overfitting_warning"] = False
-        if overfitting_ratio > 1.3:  # Now requiring a more significant gap
-            logger.warning(f"Model may be overfitting: train accuracy={train_accuracy:.4f}, test accuracy={test_accuracy:.4f}")
-            metrics["overfitting_warning"] = True
-
+        metrics["overfitting_warning"] = bool(overfitting_ratio > 1.3)  # Convert to bool for serialization
         metrics["overfitting_ratio"] = float(overfitting_ratio)
 
-        # Add feature importances with improved handling for different model types
+        # Add feature importances - SIMPLIFY FOR API COMPATIBILITY
         if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
             # Extract feature importances from tree-based models
             feature_importances = pipeline.named_steps['classifier'].feature_importances_
 
-            # Create a mapping of importances to original feature names
-            # This is a simplified approach - the actual column names after preprocessing might be different
-            importance_dict = {}
+            # Create a dictionary of feature importances (limit to 10 for simplicity)
+            feature_dict = {}
             for i, feature in enumerate(feature_names):
-                if i < len(feature_importances):
-                    importance_dict[feature] = float(feature_importances[i])
+                if i < len(feature_importances) and i < 10:  # Limit to avoid huge responses
+                    feature_dict[feature] = float(feature_importances[i])
 
-            # Sort by importance
-            sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-
-            # Get top features (up to 10 or all if fewer)
-            top_n = min(10, len(sorted_features))
-            top_features = sorted_features[:top_n]
-            metrics["top_features"] = {str(k): float(v) for k, v in top_features}
+            metrics["top_features"] = feature_dict
 
         elif hasattr(pipeline.named_steps['classifier'], 'coef_') and request.algorithm == 'logisticregression':
             # For logistic regression, extract coefficients
             coefficients = pipeline.named_steps['classifier'].coef_[0]
 
-            # Create a mapping of coefficients to feature names
+            # Create a dictionary of coefficient importances (limit to 10)
             coef_dict = {}
             for i, feature in enumerate(feature_names):
-                if i < len(coefficients):
-                    coef_dict[feature] = abs(float(coefficients[i]))  # Use absolute value for importance
+                if i < len(coefficients) and i < 10:  # Limit to avoid huge responses
+                    coef_dict[feature] = float(abs(coefficients[i]))  # Use absolute value for importance
 
-            # Sort by importance
-            sorted_features = sorted(coef_dict.items(), key=lambda x: x[1], reverse=True)
-
-            # Get top features
-            top_n = min(10, len(sorted_features))
-            top_features = sorted_features[:top_n]
-            metrics["top_features"] = {str(k): float(v) for k, v in top_features}
-
-        # Add prediction examples for validation
-        try:
-            # Create example predictions for a few test samples
-            example_indices = np.random.choice(range(len(X_test)), min(3, len(X_test)), replace=False)
-            examples = []
-
-            for idx in example_indices:
-                example = {
-                    "features": X_test.iloc[idx].to_dict(),
-                    "actual": y_test.iloc[idx] if hasattr(y_test, 'iloc') else y_test[idx],
-                    "predicted": y_pred[idx],
-                }
-                if y_pred_proba is not None:
-                    example["probability"] = float(y_pred_proba[idx][1]) if len(y_pred_proba[idx]) > 1 else float(y_pred_proba[idx][0])
-
-                examples.append(example)
-
-            metrics["examples"] = examples
-        except Exception as e:
-            logger.warning(f"Could not generate prediction examples: {e}")
-
-        # Convert all metric values to appropriate formats
-        metrics = {k: (float(v) if isinstance(v, (np.floating, float, int, np.integer)) and not isinstance(v, bool) 
-                     else v) for k, v in metrics.items()}
-
-        logger.info(f"Model metrics: {metrics}")
+            metrics["top_features"] = coef_dict
 
         # Generate model ID
         model_id = str(uuid.uuid4())
@@ -576,10 +518,23 @@ async def train_model(
         training_time = time.time() - start_time
         logger.info(f"Training completed in {training_time:.2f} seconds")
 
+        # Clean metrics for serialization (simpler format for compatibility)
+        serializable_metrics = {}
+        for key, value in metrics.items():
+            if isinstance(value, dict):
+                # For nested dictionaries like top_features, ensure all values are primitive types
+                serializable_metrics[key] = {str(k): float(v) for k, v in value.items()}
+            elif isinstance(value, (np.floating, float, int, np.integer, bool)):
+                serializable_metrics[key] = float(value) if not isinstance(value, bool) else value
+            else:
+                # Skip complex objects that can't be easily serialized
+                continue
+
+        # Return a simplified response for API compatibility
         return {
             "model_id": model_id,
             "algorithm": request.algorithm,
-            "metrics": metrics,
+            "metrics": serializable_metrics,
             "feature_names": [str(f) for f in feature_names],
             "target_classes": [int(c) if isinstance(c, (np.integer, np.int64, np.int32)) else c for c in pipeline.classes_],
             "trained_at": datetime.now().isoformat(),
@@ -595,7 +550,7 @@ async def train_model(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error training model: {str(e)}"
         )
-
+        
 @app.post("/predict", response_model=PredictResponse, dependencies=[Depends(verify_api_key)])
 async def predict(request: PredictRequest):
     """
