@@ -75,12 +75,15 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 MODEL_CACHE = {}
 
 # Pydantic models for requests and responses
-class TrainRequest(BaseModel):
-    courseid: int
-    algorithm: str = "randomforest"  # Default to RandomForest
-    target_column: str = "final_outcome"
-    id_columns: List[str] = []
-    test_size: float = 0.2
+class TrainResponse(BaseModel):
+    model_id: str
+    algorithm: str
+    metrics: Dict[str, Union[Optional[float], Dict[str, float]]]  # Modified to allow dictionary values
+    feature_names: List[str]
+    target_classes: List[Any]
+    trained_at: str
+    training_time_seconds: float
+    model_path: Optional[str] = None
 
     class Config:
         # Allow arbitrary types for field values
@@ -430,11 +433,11 @@ async def train_model(
             metrics["overfitting_warning"] = False
             metrics["overfitting_ratio"] = float(overfitting_ratio)
 
-        # Add feature importances if available
+        # Update the section where you add top_features to metrics
         if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
             # Get feature names after preprocessing (if possible)
             feature_importances = pipeline.named_steps['classifier'].feature_importances_
-
+        
             # For simplicity, we'll just use the top features
             if len(feature_importances) == len(feature_names):
                 # Create a dictionary of feature importance
@@ -443,7 +446,9 @@ async def train_model(
                 sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
                 # Get top 10 features
                 top_features = sorted_features[:10]
-                metrics["top_features"] = {str(k): float(v) for k, v in top_features}
+                # Instead of adding to metrics directly, convert to strings first
+                top_features_dict = {str(k): float(v) for k, v in top_features}
+                metrics["top_features"] = top_features_dict
 
         # Convert all metric values to float or None
         metrics = {k: (float(v) if v is not None and not isinstance(v, bool) and not isinstance(v, dict) else v) 
