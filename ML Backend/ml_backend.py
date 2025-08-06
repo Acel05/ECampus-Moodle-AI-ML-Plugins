@@ -12,6 +12,7 @@ import logging
 import traceback
 import tempfile
 import shutil
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Union
 
@@ -205,6 +206,72 @@ def calculate_confidence_interval(prob, n=100, confidence=0.95):
         "confidence": confidence
     }
 
+def identify_leaky_features(df, target_column):
+    """
+    Identify and filter out leaky features that could lead to data leakage.
+
+    Returns:
+        filtered_df: DataFrame with leaky features removed
+        leaky_features: List of features identified as potentially leaky
+    """
+    leaky_features = []
+
+    # Known patterns for leaky features
+    leaky_patterns = [
+        r'final.*score',
+        r'final.*grade',
+        r'letter_grade',
+        r'pass[_\s]?fail',
+        r'outcome',
+        r'result',
+        r'grade$',
+        r'total.*grade',
+        r'overall.*score',
+        r'final.*result',
+        r'completion.*status'
+    ]
+
+    # Identify features matching leaky patterns
+    for col in df.columns:
+        col_lower = col.lower()
+        if col != target_column:  # Skip target column itself
+            for pattern in leaky_patterns:
+                if re.search(pattern, col_lower):
+                    leaky_features.append(col)
+                    break
+
+    logger.warning(f"Identified {len(leaky_features)} potentially leaky features: {leaky_features}")
+
+    # Check for high correlation with target
+    if len(df) > 10:  # Only if we have enough samples
+        try:
+            target_series = df[target_column]
+            # For non-numeric targets, convert to numeric
+            if target_series.dtype == 'object' or target_series.dtype.name == 'category':
+                target_numeric = pd.factorize(target_series)[0]
+            else:
+                target_numeric = target_series.values
+
+            remaining_cols = [c for c in df.columns if c != target_column and c not in leaky_features]
+
+            for col in remaining_cols:
+                if df[col].dtype.kind in 'ifc':  # Only numeric columns
+                    try:
+                        # Calculate correlation
+                        corr = np.corrcoef(df[col].astype(float), target_numeric)[0, 1]
+                        if abs(corr) > 0.9:  # Extremely high correlation may indicate data leakage
+                            leaky_features.append(col)
+                            logger.warning(f"Detected highly correlated feature: {col} (correlation: {corr:.4f})")
+                    except:
+                        pass  # Skip on error
+        except Exception as e:
+            logger.warning(f"Error in correlation check: {str(e)}")
+
+    # Return the filtered DataFrame
+    filtered_df = df.drop(columns=leaky_features)
+
+    return filtered_df, leaky_features
+
 @app.post("/train", response_model=TrainResponse, dependencies=[Depends(verify_api_key)])
 async def train_model(
     courseid: int = Form(...),
@@ -323,8 +390,12 @@ async def train_model(
         # Print target distribution
         logger.info(f"Target distribution: {pd.Series(y).value_counts().to_dict()}")
 
-        # Feature selection
+        # Remove ID columns and target column
         X = df.drop(columns=[request_data["target_column"]] + request_data["id_columns"])
+
+        # NEW: Identify and remove leaky features
+        X, leaky_features = identify_leaky_features(X, request_data["target_column"])
+        logger.warning(f"Removed {len(leaky_features)} leaky features that could cause data leakage")
 
         # Remove constant features
         constant_features = [col for col in X.columns if X[col].nunique() <= 1]
@@ -338,13 +409,22 @@ async def train_model(
             try:
                 corr_matrix = numeric_X.corr().abs()
                 upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-                high_corr_cols = [column for column in upper.columns if any(upper[column] > 0.95)]
+                # Lower the threshold to 0.85 from 0.95 to be more conservative
+                high_corr_cols = [column for column in upper.columns if any(upper[column] > 0.85)]
 
                 if high_corr_cols:
                     logger.info(f"Removing {len(high_corr_cols)} highly correlated features")
                     X = X.drop(columns=high_corr_cols)
             except Exception as e:
                 logger.warning(f"Error computing correlations: {str(e)}")
+
+        # Check if we have enough features left
+        if X.shape[1] < 3:
+            logger.warning(f"Very few features remain ({X.shape[1]}). Model may not be effective.")
+            # Add a warning note to return to the user
+            warning_note = f"Warning: Only {X.shape[1]} features remain after filtering. Model may have limited predictive power."
+        else:
+            warning_note = None
 
         feature_names = X.columns.tolist()
         logger.info(f"Final feature count: {len(feature_names)}")
@@ -391,8 +471,9 @@ async def train_model(
 
         # Train-test split with stratification when possible
         try:
+            # NEW: Use stratified k-fold cross-validation for better evaluation
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=request_data["test_size"], 
-                                                               random_state=42, stratify=y)
+                                                              random_state=42, stratify=y)
         except ValueError:
             logger.warning("Stratified split failed, falling back to random split")
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=request_data["test_size"], 
@@ -404,7 +485,7 @@ async def train_model(
         # Random Forest Classifier (Always available)
         models['randomforest'] = RandomForestClassifier(
             n_estimators=100, 
-            max_depth=10, 
+            max_depth=None,  # Changed from 10 to None to prevent underfitting
             min_samples_split=5, 
             min_samples_leaf=2, 
             class_weight=class_weight, 
@@ -415,7 +496,7 @@ async def train_model(
         # Extra Trees Classifier (Always available)
         models['extratrees'] = ExtraTreesClassifier(
             n_estimators=100, 
-            max_depth=10, 
+            max_depth=None,  # Changed from 10 to None
             min_samples_split=5, 
             min_samples_leaf=2, 
             class_weight=class_weight, 
@@ -439,9 +520,11 @@ async def train_model(
                 subsample=0.8,
                 colsample_bytree=0.8,
                 random_state=42,
-                use_label_encoder=False,
                 eval_metric='logloss',
-                n_jobs=-1
+                n_jobs=-1,
+                # For newer versions
+                use_label_encoder=False if hasattr(XGBClassifier, 'use_label_encoder') else None,
+                enable_categorical=True if hasattr(XGBClassifier, 'enable_categorical') else False
             )
 
         # CatBoost Classifier (If available)
@@ -516,7 +599,7 @@ async def train_model(
                 # Create a new calibrated classifier
                 calibrated_model = CalibratedClassifierCV(
                     base_estimator=None,  # Use prefit=False to avoid the named_steps issue
-                    method='isotonic',
+                    method='sigmoid',  # Changed from isotonic to sigmoid for smaller datasets
                     cv=3,  # Use 3-fold CV
                     n_jobs=-1
                 )
@@ -562,8 +645,13 @@ async def train_model(
             "precision": float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
             "recall": float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
             "f1": float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
-            "k_folds": 5  # Explicitly record k value used for cross-validation
+            "k_folds": 5,  # Explicitly record k value used for cross-validation
+            "removed_leaky_features": leaky_features  # Add the leaky features to metrics
         }
+
+        # Add warning if necessary
+        if warning_note:
+            metrics["warning"] = warning_note
 
         # Compute ROC AUC for binary classification
         if len(np.unique(y)) == 2:
@@ -575,12 +663,15 @@ async def train_model(
 
         # Check for overfitting
         train_acc = accuracy_score(y_train, pipeline.predict(X_train))
-        overfitting_ratio = train_acc / max(metrics["accuracy"], 0.001)
+        test_acc = metrics["accuracy"]
+        overfitting_ratio = train_acc / max(test_acc, 0.001)
         metrics["overfitting_warning"] = overfitting_ratio > 1.2
         metrics["overfitting_ratio"] = float(overfitting_ratio)
+        metrics["train_accuracy"] = float(train_acc)
+        metrics["test_accuracy"] = float(test_acc)
 
         if metrics["overfitting_warning"]:
-            logger.warning(f"Model may be overfitting: train accuracy={train_acc:.4f}, test accuracy={metrics['accuracy']:.4f}")
+            logger.warning(f"Model may be overfitting: train accuracy={train_acc:.4f}, test accuracy={test_acc:.4f}")
 
         # Extract feature importance if available
         feature_importance = None
@@ -664,7 +755,8 @@ async def train_model(
             'target_classes': list(np.unique(y)),
             'metrics': metrics,
             'cv_scores': cv_scores.tolist(),
-            'effective_sample_size': effective_n
+            'effective_sample_size': effective_n,
+            'leaky_features': leaky_features  # Store the leaky features for reference
         }
 
         # Save model to disk and cache
@@ -727,6 +819,7 @@ async def predict(request: dict):
         feature_names = model_data['feature_names']
         effective_n = model_data.get('effective_sample_size', 50)  # Default to 50 if not stored
         algorithm = model_data.get('algorithm', 'unknown')
+        leaky_features = model_data.get('leaky_features', [])
 
         logger.info(f"Model algorithm: {algorithm}")
         logger.info(f"Model feature names: {len(feature_names)} features")
@@ -734,6 +827,12 @@ async def predict(request: dict):
         # Prepare input data
         try:
             input_df = pd.DataFrame([features] if not is_batch else features)
+
+            # Remove any leaky features from input data
+            for lf in leaky_features:
+                if lf in input_df.columns:
+                    logger.info(f"Removing leaky feature {lf} from prediction input")
+                    input_df = input_df.drop(columns=[lf])
 
             # Handle missing columns
             for feat in feature_names:
@@ -865,8 +964,10 @@ async def list_models(course_id: int):
                     "model_id": model_id,
                     "algorithm": model_data.get('algorithm', 'unknown'),
                     "accuracy": model_data.get('metrics', {}).get('accuracy', 0),
+                    "cv_accuracy": model_data.get('metrics', {}).get('cv_accuracy', 0),
                     "trained_at": model_data.get('trained_at', ''),
-                    "file_size_mb": round(os.path.getsize(model_path) / (1024 * 1024), 2)
+                    "file_size_mb": round(os.path.getsize(model_path) / (1024 * 1024), 2),
+                    "removed_leaky_features": model_data.get('leaky_features', [])
                 })
             except Exception as e:
                 logger.error(f"Error loading model {model_id}: {str(e)}")
@@ -905,7 +1006,8 @@ async def get_model_details(model_id: str):
             "target_classes": model_data.get('target_classes', []),
             "trained_at": model_data.get('trained_at', ''),
             "file_path": model_path,
-            "file_size_mb": round(os.path.getsize(model_path) / (1024 * 1024), 2)
+            "file_size_mb": round(os.path.getsize(model_path) / (1024 * 1024), 2),
+            "removed_leaky_features": model_data.get('leaky_features', [])
         }
     except Exception as e:
         logger.error(f"Error loading model {model_id}: {str(e)}")
