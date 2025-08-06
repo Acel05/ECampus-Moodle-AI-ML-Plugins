@@ -32,14 +32,35 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, AdaBoostClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.feature_selection import SelectFromModel
 from sklearn.calibration import CalibratedClassifierCV
+
+# Import the requested boosting algorithms
+try:
+    import xgboost as xgb
+    from xgboost import XGBClassifier
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+    logging.warning("XGBoost not available. Install with: pip install xgboost")
+
+try:
+    import catboost
+    from catboost import CatBoostClassifier
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
+    logging.warning("CatBoost not available. Install with: pip install catboost")
+
+try:
+    import lightgbm as lgb
+    from lightgbm import LGBMClassifier
+    LIGHTGBM_AVAILABLE = True
+except ImportError:
+    LIGHTGBM_AVAILABLE = False
+    logging.warning("LightGBM not available. Install with: pip install lightgbm")
 
 # Load environment variables
 load_dotenv()
@@ -55,7 +76,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Student Performance Predictor API",
     description="Enhanced Machine Learning API for Student Performance Prediction with confidence intervals",
-    version="1.1.0"
+    version="1.2.0"
 )
 
 # Enable CORS
@@ -131,12 +152,24 @@ async def health_check():
         with open(test_file, "w") as f:
             f.write("Health check")
         os.remove(test_file)
+
+        # Check which algorithms are available
+        algorithms = {
+            "randomforest": True,
+            "extratrees": True,
+            "adaboost": True,
+            "xgboost": XGBOOST_AVAILABLE,
+            "catboost": CATBOOST_AVAILABLE,
+            "lightgbm": LIGHTGBM_AVAILABLE
+        }
+
         return {
             "status": "healthy",
             "time": datetime.now().isoformat(),
-            "version": "1.1.0",
+            "version": "1.2.0",
             "models_dir": MODELS_DIR,
             "models_count": len([f for f in os.listdir(MODELS_DIR) if f.endswith('.joblib')]),
+            "available_algorithms": algorithms,
             "environment": {
                 "debug": os.getenv("DEBUG", "false"),
                 "api_key_configured": API_KEY != "changeme"
@@ -365,56 +398,81 @@ async def train_model(
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=request_data["test_size"], 
                                                               random_state=42)
 
-        # Define models with optimized hyperparameters
-        models = {
-            'randomforest': RandomForestClassifier(
-                n_estimators=100, 
-                max_depth=10, 
-                min_samples_split=5, 
-                min_samples_leaf=2, 
-                class_weight=class_weight, 
+        # Define models with your specified algorithms
+        models = {}
+
+        # Random Forest Classifier (Always available)
+        models['randomforest'] = RandomForestClassifier(
+            n_estimators=100, 
+            max_depth=10, 
+            min_samples_split=5, 
+            min_samples_leaf=2, 
+            class_weight=class_weight, 
+            random_state=42,
+            n_jobs=-1  # Use all cores
+        )
+
+        # Extra Trees Classifier (Always available)
+        models['extratrees'] = ExtraTreesClassifier(
+            n_estimators=100, 
+            max_depth=10, 
+            min_samples_split=5, 
+            min_samples_leaf=2, 
+            class_weight=class_weight, 
+            random_state=42,
+            n_jobs=-1
+        )
+
+        # AdaBoost Classifier (Always available)
+        models['adaboost'] = AdaBoostClassifier(
+            n_estimators=100, 
+            learning_rate=0.1, 
+            random_state=42
+        )
+
+        # XGBoost Classifier (If available)
+        if XGBOOST_AVAILABLE:
+            models['xgboost'] = XGBClassifier(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                subsample=0.8,
+                colsample_bytree=0.8,
                 random_state=42,
-                n_jobs=-1  # Use all cores
-            ),
-            'logisticregression': LogisticRegression(
-                C=1.0, 
-                class_weight=class_weight, 
-                max_iter=1000, 
-                solver='liblinear',  # More robust for small datasets
-                random_state=42
-            ),
-            'gradientboosting': GradientBoostingClassifier(
-                n_estimators=100, 
-                learning_rate=0.1, 
-                max_depth=3, 
-                subsample=0.8, 
-                random_state=42
-            ),
-            'svm': SVC(
-                C=1.0, 
-                kernel='rbf', 
-                class_weight=class_weight, 
-                probability=True, 
-                random_state=42
-            ),
-            'decisiontree': DecisionTreeClassifier(
-                max_depth=5, 
-                min_samples_split=5, 
-                min_samples_leaf=2, 
-                class_weight=class_weight, 
-                random_state=42
-            ),
-            'knn': KNeighborsClassifier(
-                n_neighbors=5, 
-                weights='distance'
+                use_label_encoder=False,
+                eval_metric='logloss',
+                n_jobs=-1
             )
-        }
+
+        # CatBoost Classifier (If available)
+        if CATBOOST_AVAILABLE:
+            models['catboost'] = CatBoostClassifier(
+                iterations=100,
+                depth=6,
+                learning_rate=0.1,
+                loss_function='Logloss',
+                verbose=0,
+                random_seed=42
+            )
+
+        # LightGBM Classifier (If available)
+        if LIGHTGBM_AVAILABLE:
+            models['lightgbm'] = LGBMClassifier(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42,
+                n_jobs=-1
+            )
 
         # Select model based on algorithm parameter or fall back to RandomForest
-        model = models.get(request_data["algorithm"], models['randomforest'])
         if request_data["algorithm"] not in models:
-            logger.warning(f"Unsupported algorithm '{request_data['algorithm']}', falling back to RandomForest")
+            logger.warning(f"Requested algorithm '{request_data['algorithm']}' not available, falling back to RandomForest")
             request_data["algorithm"] = 'randomforest'
+
+        model = models[request_data["algorithm"]]
 
         # Create pipeline with preprocessor and classifier
         pipeline = Pipeline([
@@ -434,10 +492,24 @@ async def train_model(
         pipeline.fit(X_train, y_train)
         logger.info("Model training completed")
 
+        # Special handling for CatBoost
+        if request_data['algorithm'] == 'catboost':
+            # CatBoost doesn't work well with scikit-learn's pipeline for feature names
+            # Save categorical features for CatBoost
+            cat_features = []
+            if categorical_cols:
+                try:
+                    # Get categorical feature indices after preprocessing
+                    cat_features = list(range(len(categorical_cols)))
+                    pipeline.named_steps['classifier'].cat_features = cat_features
+                except Exception as e:
+                    logger.warning(f"Error setting cat_features for CatBoost: {e}")
+
         # Apply probability calibration for better confidence estimates
-        # FIX: Store the original pipeline and use a separate calibrated model
-        # This avoids the 'named_steps' attribute error
+        # Store the original pipeline and use a separate calibrated model
         original_pipeline = pipeline
+        calibrated_pipeline = None
+
         if hasattr(original_pipeline, 'predict_proba'):
             logger.info("Applying probability calibration for reliable confidence estimates")
             try:
@@ -456,36 +528,31 @@ async def train_model(
                 # Use the transformed data to fit the calibrator
                 calibrated_model.fit(X_train_transformed, y_train)
 
-                # Create a function to make calibrated predictions
-                def calibrated_predict(X_new):
-                    X_new_transformed = original_pipeline.named_steps['preprocessor'].transform(X_new)
-                    return calibrated_model.predict(X_new_transformed)
-
-                def calibrated_predict_proba(X_new):
-                    X_new_transformed = original_pipeline.named_steps['preprocessor'].transform(X_new)
-                    return calibrated_model.predict_proba(X_new_transformed)
-
-                # Store the calibration information
-                pipeline.calibrated_model = calibrated_model
-                pipeline.calibrated_predict = calibrated_predict
-                pipeline.calibrated_predict_proba = calibrated_predict_proba
+                # Create a calibrated pipeline
+                calibrated_pipeline = Pipeline([
+                    ('preprocessor', original_pipeline.named_steps['preprocessor']),
+                    ('calibrated_classifier', calibrated_model)
+                ])
 
                 logger.info("Probability calibration completed successfully")
             except Exception as e:
                 logger.warning(f"Probability calibration failed: {str(e)}")
                 logger.warning("Using uncalibrated model instead")
-                pipeline.calibrated_model = None
+                calibrated_pipeline = None
 
         # Generate predictions and evaluate model
-        if hasattr(pipeline, 'calibrated_model') and pipeline.calibrated_model is not None:
-            # Use calibrated predictions if available
-            X_test_transformed = pipeline.named_steps['preprocessor'].transform(X_test)
-            y_pred = pipeline.calibrated_model.predict(X_test_transformed)
-            y_pred_proba = pipeline.calibrated_model.predict_proba(X_test_transformed)
+        if calibrated_pipeline is not None:
+            # Use calibrated predictions
+            y_pred = calibrated_pipeline.predict(X_test)
+            y_pred_proba = calibrated_pipeline.predict_proba(X_test)
+
+            # Store both pipelines
+            pipeline.calibrated_pipeline = calibrated_pipeline
         else:
             # Use the regular pipeline
             y_pred = pipeline.predict(X_test)
             y_pred_proba = pipeline.predict_proba(X_test)
+            pipeline.calibrated_pipeline = None
 
         # Calculate comprehensive metrics
         metrics = {
@@ -516,40 +583,55 @@ async def train_model(
             logger.warning(f"Model may be overfitting: train accuracy={train_acc:.4f}, test accuracy={metrics['accuracy']:.4f}")
 
         # Extract feature importance if available
+        feature_importance = None
+
+        # Method to get feature importance from different model types
         if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
+            # Random Forest, XGBoost, LightGBM, etc.
+            feature_importance = pipeline.named_steps['classifier'].feature_importances_
+        elif hasattr(pipeline.named_steps['classifier'], 'coef_'):
+            # Linear models
+            feature_importance = np.abs(pipeline.named_steps['classifier'].coef_[0])
+        elif hasattr(pipeline.named_steps['classifier'], 'feature_importance_'):
+            # CatBoost
+            feature_importance = pipeline.named_steps['classifier'].feature_importance_
+
+        if feature_importance is not None:
             try:
-                # Extract transformed feature names
+                # Get transformed feature names if possible
                 feature_names_out = []
 
-                # Get column names after preprocessing if possible
+                # Try to get column names after preprocessing
                 try:
-                    # Newer scikit-learn versions
+                    # For newer scikit-learn versions
                     if hasattr(pipeline.named_steps['preprocessor'], 'get_feature_names_out'):
                         feature_names_out = pipeline.named_steps['preprocessor'].get_feature_names_out()
-                    # Older scikit-learn versions
+                    # For older scikit-learn versions
                     elif hasattr(pipeline.named_steps['preprocessor'], 'get_feature_names'):
                         feature_names_out = pipeline.named_steps['preprocessor'].get_feature_names()
                     else:
-                        # Fallback to numeric indices
-                        feature_names_out = [f'feature_{i}' for i in range(pipeline.named_steps['classifier'].n_features_in_)]
+                        # Create generic feature names
+                        feature_names_out = [f"feature_{i}" for i in range(len(feature_importance))]
                 except Exception as e:
-                    logger.warning(f"Error getting feature names: {str(e)}")
-                    feature_names_out = [f'feature_{i}' for i in range(pipeline.named_steps['classifier'].n_features_in_)]
+                    logger.warning(f"Error getting transformed feature names: {str(e)}")
+                    feature_names_out = [f"feature_{i}" for i in range(len(feature_importance))]
 
-                importances = pipeline.named_steps['classifier'].feature_importances_
-
-                # Ensure lengths match or use indices
-                if len(feature_names_out) == len(importances):
-                    importance_dict = dict(zip(feature_names_out, importances))
+                # Ensure lengths match
+                if len(feature_names_out) == len(feature_importance):
+                    importance_dict = dict(zip(feature_names_out, feature_importance))
                     sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
                     metrics["top_features"] = {str(k): float(v) for k, v in sorted_features[:10]}
                 else:
-                    # Fallback to unnamed features
-                    top_indices = np.argsort(importances)[-10:][::-1]
-                    metrics["top_features"] = {f"feature_{i}": float(importances[i]) for i in top_indices}
+                    logger.warning(f"Feature name length mismatch: {len(feature_names_out)} names, {len(feature_importance)} importances")
+                    # Use generic feature names
+                    top_indices = np.argsort(feature_importance)[-10:][::-1]
+                    metrics["top_features"] = {f"feature_{i}": float(feature_importance[i]) for i in top_indices}
             except Exception as e:
                 logger.warning(f"Error extracting feature importance: {str(e)}")
                 metrics["top_features"] = {}
+        else:
+            logger.info("Model does not support feature importance")
+            metrics["top_features"] = {}
 
         # Add confusion matrix
         try:
@@ -644,8 +726,10 @@ async def predict(request: dict):
         pipeline = model_data['pipeline']
         feature_names = model_data['feature_names']
         effective_n = model_data.get('effective_sample_size', 50)  # Default to 50 if not stored
+        algorithm = model_data.get('algorithm', 'unknown')
 
-        logger.info(f"Model feature names: {feature_names[:5]}{'...' if len(feature_names) > 5 else ''}")
+        logger.info(f"Model algorithm: {algorithm}")
+        logger.info(f"Model feature names: {len(feature_names)} features")
 
         # Prepare input data
         try:
@@ -675,20 +759,19 @@ async def predict(request: dict):
         # Make prediction
         logger.info("Making prediction")
         try:
-            # Check if we should use calibrated predictions
-            if hasattr(pipeline, 'calibrated_model') and pipeline.calibrated_model is not None:
-                # First apply preprocessor
-                X_transformed = pipeline.named_steps['preprocessor'].transform(input_df)
-                # Then use calibrated model
-                predictions = pipeline.calibrated_model.predict(X_transformed).tolist()
-                probabilities = pipeline.calibrated_model.predict_proba(X_transformed).tolist()
-                logger.info("Using calibrated predictions")
+            # Check if we should use calibrated pipeline
+            if hasattr(pipeline, 'calibrated_pipeline') and pipeline.calibrated_pipeline is not None:
+                logger.info("Using calibrated pipeline for prediction")
+                calibrated_pipeline = pipeline.calibrated_pipeline
+                predictions = calibrated_pipeline.predict(input_df).tolist()
+                probabilities = calibrated_pipeline.predict_proba(input_df).tolist()
             else:
                 # Use regular pipeline
+                logger.info("Using regular pipeline for prediction")
                 predictions = pipeline.predict(input_df).tolist()
                 probabilities = pipeline.predict_proba(input_df).tolist()
 
-            logger.info(f"Prediction successful: {predictions[:5]}{'...' if len(predictions) > 5 else ''}")
+            logger.info(f"Prediction successful")
         except Exception as e:
             logger.error(f"Error during prediction: {str(e)}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error during prediction: {str(e)}")
@@ -696,8 +779,13 @@ async def predict(request: dict):
         # Process results based on batch or single prediction
         if is_batch:
             # For batch predictions, get probability of positive class
-            positive_class_idx = 1 if len(pipeline.classes_) == 2 and 1 in pipeline.classes_ else 0
-            positive_probs = [probs[positive_class_idx] for probs in probabilities] if len(pipeline.classes_) == 2 else [max(probs) for probs in probabilities]
+            target_classes = model_data['target_classes']
+
+            # Find the positive class index (usually 1 in binary classification)
+            positive_class_idx = 1 if len(target_classes) == 2 and 1 in target_classes else 0
+
+            # Get probabilities for the positive class
+            positive_probs = [probs[positive_class_idx] for probs in probabilities] if len(target_classes) == 2 else [max(probs) for probs in probabilities]
 
             # Calculate confidence intervals for each prediction
             confidence_intervals = [
@@ -709,6 +797,7 @@ async def predict(request: dict):
                 "probabilities": positive_probs,
                 "confidence_intervals": confidence_intervals,
                 "model_id": model_id,
+                "algorithm": algorithm,
                 "prediction_time": datetime.now().isoformat(),
                 "features": features  # Return the batch of features
             }
@@ -717,14 +806,21 @@ async def predict(request: dict):
             prediction = predictions[0]
 
             # Get probability of prediction class or positive class for binary classification
-            if len(model_data['target_classes']) == 2:
-                positive_class_idx = 1 if 1 in model_data['target_classes'] else 0
+            target_classes = model_data['target_classes']
+
+            if len(target_classes) == 2:
+                # Binary classification - get probability for positive class (usually 1)
+                positive_class_idx = 1 if 1 in target_classes else 0
                 probability = float(probabilities[0][positive_class_idx])
             else:
-                # Find the index of the predicted class in the target classes
-                target_classes = model_data['target_classes']
-                pred_idx = target_classes.index(prediction) if prediction in target_classes else 0
-                probability = float(probabilities[0][pred_idx])
+                # Multi-class - get probability for the predicted class
+                try:
+                    pred_idx = target_classes.index(prediction) if prediction in target_classes else 0
+                    probability = float(probabilities[0][pred_idx])
+                except (ValueError, IndexError):
+                    # Fallback if prediction is not in target classes
+                    pred_idx = 0
+                    probability = float(probabilities[0][pred_idx])
 
             # Calculate confidence interval for the prediction
             confidence_interval = calculate_confidence_interval(probability, n=effective_n)
@@ -736,6 +832,7 @@ async def predict(request: dict):
                 "probabilities": probabilities[0],
                 "confidence_interval": confidence_interval,
                 "model_id": model_id,
+                "algorithm": algorithm,
                 "prediction_time": datetime.now().isoformat(),
                 "features": features  # Return the input features
             }
@@ -745,28 +842,6 @@ async def predict(request: dict):
     except Exception as e:
         logger.exception(f"Unhandled error in prediction: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error making prediction: {str(e)}")
-
-@app.get("/debug/filesystem", dependencies=[Depends(verify_api_key)])
-async def debug_filesystem(path: str = None):
-    if not os.getenv("DEBUG", "false").lower() == "true":
-        raise HTTPException(status_code=403, detail="Debug mode not enabled")
-    result = {
-        "current_dir": os.getcwd(),
-        "models_dir": MODELS_DIR,
-        "models_dir_exists": os.path.exists(MODELS_DIR),
-        "models_dir_writable": os.access(MODELS_DIR, os.W_OK),
-        "models_content": os.listdir(MODELS_DIR) if os.path.exists(MODELS_DIR) else []
-    }
-    if path:
-        result["path_exists"] = os.path.exists(path)
-        if result["path_exists"]:
-            result.update({
-                "path_is_file": os.path.isfile(path),
-                "path_is_dir": os.path.isdir(path),
-                "path_size": os.path.getsize(path) if os.path.isfile(path) else None,
-                "path_content": os.listdir(path) if os.path.isdir(path) else None
-            })
-    return result
 
 @app.get("/models/{course_id}", dependencies=[Depends(verify_api_key)])
 async def list_models(course_id: int):
