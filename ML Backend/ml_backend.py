@@ -435,23 +435,57 @@ async def train_model(
         logger.info("Model training completed")
 
         # Apply probability calibration for better confidence estimates
-        if hasattr(pipeline.named_steps['classifier'], 'predict_proba'):
+        # FIX: Store the original pipeline and use a separate calibrated model
+        # This avoids the 'named_steps' attribute error
+        original_pipeline = pipeline
+        if hasattr(original_pipeline, 'predict_proba'):
             logger.info("Applying probability calibration for reliable confidence estimates")
-            calibrated_classifier = CalibratedClassifierCV(
-                pipeline, 
-                method='isotonic', 
-                cv='prefit'  # Use already fitted classifier
-            )
             try:
-                calibrated_classifier.fit(X_test, y_test)
-                pipeline = calibrated_classifier
-                logger.info("Probability calibration completed")
+                # Create a new calibrated classifier
+                calibrated_model = CalibratedClassifierCV(
+                    base_estimator=None,  # Use prefit=False to avoid the named_steps issue
+                    method='isotonic',
+                    cv=3,  # Use 3-fold CV
+                    n_jobs=-1
+                )
+
+                # Apply preprocessor to get transformed data
+                X_train_transformed = original_pipeline.named_steps['preprocessor'].transform(X_train)
+                X_test_transformed = original_pipeline.named_steps['preprocessor'].transform(X_test)
+
+                # Use the transformed data to fit the calibrator
+                calibrated_model.fit(X_train_transformed, y_train)
+
+                # Create a function to make calibrated predictions
+                def calibrated_predict(X_new):
+                    X_new_transformed = original_pipeline.named_steps['preprocessor'].transform(X_new)
+                    return calibrated_model.predict(X_new_transformed)
+
+                def calibrated_predict_proba(X_new):
+                    X_new_transformed = original_pipeline.named_steps['preprocessor'].transform(X_new)
+                    return calibrated_model.predict_proba(X_new_transformed)
+
+                # Store the calibration information
+                pipeline.calibrated_model = calibrated_model
+                pipeline.calibrated_predict = calibrated_predict
+                pipeline.calibrated_predict_proba = calibrated_predict_proba
+
+                logger.info("Probability calibration completed successfully")
             except Exception as e:
                 logger.warning(f"Probability calibration failed: {str(e)}")
+                logger.warning("Using uncalibrated model instead")
+                pipeline.calibrated_model = None
 
         # Generate predictions and evaluate model
-        y_pred = pipeline.predict(X_test)
-        y_pred_proba = pipeline.predict_proba(X_test)
+        if hasattr(pipeline, 'calibrated_model') and pipeline.calibrated_model is not None:
+            # Use calibrated predictions if available
+            X_test_transformed = pipeline.named_steps['preprocessor'].transform(X_test)
+            y_pred = pipeline.calibrated_model.predict(X_test_transformed)
+            y_pred_proba = pipeline.calibrated_model.predict_proba(X_test_transformed)
+        else:
+            # Use the regular pipeline
+            y_pred = pipeline.predict(X_test)
+            y_pred_proba = pipeline.predict_proba(X_test)
 
         # Calculate comprehensive metrics
         metrics = {
@@ -484,22 +518,28 @@ async def train_model(
         # Extract feature importance if available
         if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
             try:
-                # Extract preprocessor to get transformed feature names
-                preprocessor = pipeline.named_steps['preprocessor']
+                # Extract transformed feature names
                 feature_names_out = []
 
-                # Try to get feature names from the preprocessor
-                for name, trans, cols in preprocessor.transformers_:
-                    if hasattr(trans, 'get_feature_names_out'):
-                        feature_names_out.extend(trans.get_feature_names_out(cols))
+                # Get column names after preprocessing if possible
+                try:
+                    # Newer scikit-learn versions
+                    if hasattr(pipeline.named_steps['preprocessor'], 'get_feature_names_out'):
+                        feature_names_out = pipeline.named_steps['preprocessor'].get_feature_names_out()
+                    # Older scikit-learn versions
+                    elif hasattr(pipeline.named_steps['preprocessor'], 'get_feature_names'):
+                        feature_names_out = pipeline.named_steps['preprocessor'].get_feature_names()
                     else:
-                        # Fallback for older scikit-learn versions
-                        feature_names_out.extend([f"{name}_{col}" for col in cols])
+                        # Fallback to numeric indices
+                        feature_names_out = [f'feature_{i}' for i in range(pipeline.named_steps['classifier'].n_features_in_)]
+                except Exception as e:
+                    logger.warning(f"Error getting feature names: {str(e)}")
+                    feature_names_out = [f'feature_{i}' for i in range(pipeline.named_steps['classifier'].n_features_in_)]
 
                 importances = pipeline.named_steps['classifier'].feature_importances_
 
-                # Ensure lengths match
-                if len(importances) == len(feature_names_out):
+                # Ensure lengths match or use indices
+                if len(feature_names_out) == len(importances):
                     importance_dict = dict(zip(feature_names_out, importances))
                     sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
                     metrics["top_features"] = {str(k): float(v) for k, v in sorted_features[:10]}
@@ -509,6 +549,7 @@ async def train_model(
                     metrics["top_features"] = {f"feature_{i}": float(importances[i]) for i in top_indices}
             except Exception as e:
                 logger.warning(f"Error extracting feature importance: {str(e)}")
+                metrics["top_features"] = {}
 
         # Add confusion matrix
         try:
@@ -634,8 +675,19 @@ async def predict(request: dict):
         # Make prediction
         logger.info("Making prediction")
         try:
-            predictions = pipeline.predict(input_df).tolist()
-            probabilities = pipeline.predict_proba(input_df).tolist()
+            # Check if we should use calibrated predictions
+            if hasattr(pipeline, 'calibrated_model') and pipeline.calibrated_model is not None:
+                # First apply preprocessor
+                X_transformed = pipeline.named_steps['preprocessor'].transform(input_df)
+                # Then use calibrated model
+                predictions = pipeline.calibrated_model.predict(X_transformed).tolist()
+                probabilities = pipeline.calibrated_model.predict_proba(X_transformed).tolist()
+                logger.info("Using calibrated predictions")
+            else:
+                # Use regular pipeline
+                predictions = pipeline.predict(input_df).tolist()
+                probabilities = pipeline.predict_proba(input_df).tolist()
+
             logger.info(f"Prediction successful: {predictions[:5]}{'...' if len(predictions) > 5 else ''}")
         except Exception as e:
             logger.error(f"Error during prediction: {str(e)}")
@@ -665,11 +717,13 @@ async def predict(request: dict):
             prediction = predictions[0]
 
             # Get probability of prediction class or positive class for binary classification
-            if len(pipeline.classes_) == 2:
-                positive_class_idx = 1 if 1 in pipeline.classes_ else 0
+            if len(model_data['target_classes']) == 2:
+                positive_class_idx = 1 if 1 in model_data['target_classes'] else 0
                 probability = float(probabilities[0][positive_class_idx])
             else:
-                pred_idx = list(pipeline.classes_).index(prediction)
+                # Find the index of the predicted class in the target classes
+                target_classes = model_data['target_classes']
+                pred_idx = target_classes.index(prediction) if prediction in target_classes else 0
                 probability = float(probabilities[0][pred_idx])
 
             # Calculate confidence interval for the prediction
