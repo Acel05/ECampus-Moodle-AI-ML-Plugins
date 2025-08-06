@@ -4,6 +4,15 @@ FROM python:3.10-slim
 # Set working directory
 WORKDIR /app
 
+# Install system dependencies required for scientific libraries
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    libgomp1 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy requirements file
 COPY requirements.txt .
 
@@ -21,3 +30,4 @@ EXPOSE 8000
 
 # Start the application
 CMD uvicorn ml_backend:app --host=0.0.0.0 --port=8000
+
