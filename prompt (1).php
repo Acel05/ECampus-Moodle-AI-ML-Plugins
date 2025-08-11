@@ -10,18 +10,16 @@ STUDENTPERFORMANCE
 │   ├── refreshpredictions.php
 │   ├── testbackend.php
 │   ├── train_model.php
-│   ├── trainglobalmodel.php
 │   ├── upload_dataset.php
 │   ├── viewdataset.php
 │   ├── viewmodel.php
 │   ├── viewtasks.php
 ├── amd
 │   ├── src
-│       ├── admin_dashboard.js
 │       ├── admin_interface.js
 │       ├── chart_renderer.js
 │       ├── prediction_viewer.js
-│       ├── teacher_dashboard.js
+│       ├── refresh_button.js
 ├── classes
 │   ├── analytics
 │       ├── data_preprocessor.php
@@ -70,6 +68,7 @@ generate_prediction.php
 lib.php
 reports.php
 settings.php
+student_refresh.php
 styles.css
 version.php
 
@@ -505,7 +504,7 @@ if ($courseid == 0) {
             $row = [];
             $row[] = format_string($course->fullname);
             $row[] = html_writer::link(
-                new moodle_url('/blocks/studentperformancepredictor/admin/managedatasets.php', 
+                new moodle_url('/blocks/studentperformancepredictor/admin/managedatasets.php',
                 ['courseid' => $course->id]),
                 get_string('managedatasets', 'block_studentperformancepredictor'),
                 ['class' => 'btn btn-primary btn-sm']
@@ -535,8 +534,20 @@ $PAGE->set_title(get_string('managedatasets', 'block_studentperformancepredictor
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->set_pagelayout('standard');
 
-// Get all datasets for this course
-$datasets = $DB->get_records('block_spp_datasets', ['courseid' => $courseid], 'timemodified DESC');
+// Get all datasets from all courses that the user can see
+$sql = "SELECT d.*, c.fullname as coursename
+        FROM {block_spp_datasets} d
+        JOIN {course} c ON d.courseid = c.id";
+
+$alldatasets = $DB->get_records_sql($sql, []);
+
+$userdatasets = [];
+foreach($alldatasets as $dataset) {
+    $coursecontext = context_course::instance($dataset->courseid);
+    if (has_capability('block/studentperformancepredictor:managemodels', $coursecontext)) {
+        $userdatasets[] = $dataset;
+    }
+}
 
 // Output starts here
 echo $OUTPUT->header();
@@ -602,7 +613,7 @@ $form .= html_writer::end_tag('form');
 echo $form;
 
 // Existing datasets list
-if (!empty($datasets)) {
+if (!empty($userdatasets)) {
     echo $OUTPUT->heading(get_string('existingdatasets', 'block_studentperformancepredictor'), 3);
     // Warn that deleting a dataset will also delete all models trained from it (backend-driven)
     echo $OUTPUT->notification(get_string('datasetdeletecascade', 'block_studentperformancepredictor'), 'info');
@@ -610,30 +621,33 @@ if (!empty($datasets)) {
     $table = new html_table();
     $table->head = [
         get_string('datasetname', 'block_studentperformancepredictor'),
+        get_string('coursename', 'block_studentperformancepredictor'),
         get_string('datasetformat', 'block_studentperformancepredictor'),
         get_string('uploaded', 'block_studentperformancepredictor'),
         get_string('actions', 'block_studentperformancepredictor')
     ];
 
-    foreach ($datasets as $dataset) {
+    foreach ($userdatasets as $dataset) {
         $row = [];
         $row[] = format_string($dataset->name);
+        $row[] = format_string($dataset->coursename);
         $row[] = format_string($dataset->fileformat);
         $row[] = userdate($dataset->timecreated);
 
         $actions = html_writer::link(
-            new moodle_url('/blocks/studentperformancepredictor/admin/viewdataset.php', 
-                ['id' => $dataset->id, 'courseid' => $courseid]), 
+            new moodle_url('/blocks/studentperformancepredictor/admin/viewdataset.php',
+                ['id' => $dataset->id, 'courseid' => $dataset->courseid]),
             get_string('view', 'block_studentperformancepredictor'),
             ['class' => 'btn btn-sm btn-secondary']
         );
 
         // Delete button triggers backend-driven cascade delete (dataset + models + files)
-        $actions .= ' ' . html_writer::link('#', 
+        $actions .= ' ' . html_writer::link('#',
             get_string('delete', 'block_studentperformancepredictor'),
             [
-                'class' => 'btn btn-sm btn-danger spp-delete-dataset', 
+                'class' => 'btn btn-sm btn-danger spp-delete-dataset',
                 'data-dataset-id' => $dataset->id,
+                'data-course-id' => $dataset->courseid,
                 'title' => get_string('datasetdeletecascadetitle', 'block_studentperformancepredictor')
             ]
         );
@@ -678,7 +692,7 @@ require_once($CFG->libdir . '/weblib.php'); // For html_writer, s, get_string
 // Get parameters - use optional_param with default for global admin page
 $courseid = optional_param('courseid', 0, PARAM_INT);
 
-// If we don't have a courseid, but we're in the site admin section, 
+// If we don't have a courseid, but we're in the site admin section,
 // redirect to course selection page
 if ($courseid == 0) {
     // Display a list of courses to select from
@@ -718,7 +732,7 @@ if ($courseid == 0) {
             $row = [];
             $row[] = format_string($course->fullname);
             $row[] = html_writer::link(
-                new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', 
+                new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php',
                 ['courseid' => $course->id]),
                 get_string('managemodels', 'block_studentperformancepredictor'),
                 ['class' => 'btn btn-primary btn-sm']
@@ -754,8 +768,8 @@ $activemodel = $DB->get_record('block_spp_models', ['courseid' => $courseid, 'ac
 // Get all models for this course
 $models = $DB->get_records('block_spp_models', ['courseid' => $courseid], 'timemodified DESC');
 
-// Get available datasets for model training
-$datasets = $DB->get_records('block_spp_datasets', ['courseid' => $courseid], 'timemodified DESC');
+// Get all available datasets for model training from all courses
+$alldatasets = $DB->get_records('block_spp_datasets', [], 'name ASC');
 
 // Get algorithm options (must match backend-supported algorithms)
 $algorithmoptions = [
@@ -780,7 +794,7 @@ echo html_writer::div(
         ['class' => 'btn btn-info mb-3 mr-2']
     ) .
     html_writer::link(
-        new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', ['courseid' => $courseid]), 
+        new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', ['courseid' => $courseid]),
         get_string('refresh', 'block_studentperformancepredictor'),
         ['class' => 'btn btn-secondary mb-3']
     ),
@@ -799,23 +813,59 @@ if (!empty($activemodel)) {
         get_string('modelname', 'block_studentperformancepredictor'),
         get_string('algorithm', 'block_studentperformancepredictor'),
         get_string('accuracy', 'block_studentperformancepredictor'),
-        get_string('status', 'block_studentperformancepredictor'),  
         get_string('created', 'block_studentperformancepredictor'),
+        get_string('status', 'block_studentperformancepredictor'),
         get_string('actions', 'block_studentperformancepredictor')
     ];
 
     $row = [];
     $row[] = format_string($activemodel->modelname);
-    $row[] = isset($algorithmoptions[$activemodel->algorithmtype]) ? 
+    $row[] = isset($algorithmoptions[$activemodel->algorithmtype]) ?
             $algorithmoptions[$activemodel->algorithmtype] : $activemodel->algorithmtype;
-    $row[] = round($activemodel->accuracy * 100, 2) . '%';
-    $row[] = html_writer::tag('span', get_string('active', 'block_studentperformancepredictor'), 
-                            ['class' => 'badge badge-success']);
+
+    if (!empty($activemodel->metrics)) {
+        $metrics = json_decode($activemodel->metrics, true);
+        $accuracy = isset($metrics['accuracy']) ? round($metrics['accuracy'] * 100, 2) : 0;
+        $cv_accuracy = isset($metrics['cv_accuracy']) ? round($metrics['cv_accuracy'] * 100, 2) : 0;
+        $overfitting_warning = isset($metrics['overfitting_warning']) ? $metrics['overfitting_warning'] : false;
+
+        if ($overfitting_warning) {
+            $row[] = html_writer::tag('span',
+                $accuracy . '% (CV: ' . $cv_accuracy . '%)',
+                ['class' => 'badge badge-warning', 'title' => get_string('potentialoverfitting', 'block_studentperformancepredictor')]);
+        } else {
+            $row[] = html_writer::tag('span',
+                $accuracy . '% (CV: ' . $cv_accuracy . '%)',
+                ['class' => 'badge badge-success']);
+        }
+    } else {
+        $row[] = isset($activemodel->accuracy) ? round($activemodel->accuracy * 100, 2) . '%' : '-';
+    }
+
     $row[] = userdate($activemodel->timemodified);
-    $row[] = html_writer::link('#', get_string('deactivate', 'block_studentperformancepredictor'), 
-                            ['class' => 'btn btn-sm btn-secondary spp-toggle-model-status', 
-                                 'data-model-id' => $activemodel->id,
-                                 'data-is-active' => 1]);
+    $row[] = html_writer::tag('span', get_string('active', 'block_studentperformancepredictor'),
+                            ['class' => 'badge badge-success']);
+
+    // Actions column for the active model
+    $actions = '';
+    $actions .= html_writer::link(
+        new moodle_url('/blocks/studentperformancepredictor/admin/viewmodel.php',
+            ['id' => $activemodel->id, 'courseid' => $courseid]),
+        get_string('viewdetails', 'block_studentperformancepredictor'),
+        ['class' => 'btn btn-sm btn-info mr-1']
+    );
+
+    $actions .= html_writer::start_tag('form', [
+        'action' => new moodle_url('/blocks/studentperformancepredictor/admin/activatemodel.php'),
+        'method' => 'post',
+        'style' => 'display:inline-block;margin:0;'
+    ]);
+    $actions .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'deactivate', 'value' => 1]);
+    $actions .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => $courseid]);
+    $actions .= html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    $actions .= html_writer::empty_tag('input', ['type' => 'submit', 'value' => get_string('deactivate', 'block_studentperformancepredictor'), 'class' => 'btn btn-sm btn-secondary']);
+    $actions .= html_writer::end_tag('form');
+    $row[] = $actions;
 
     $table->data[] = $row;
     echo html_writer::table($table);
@@ -824,16 +874,16 @@ if (!empty($activemodel)) {
 // Train new model form
 echo $OUTPUT->heading(get_string('trainnewmodel', 'block_studentperformancepredictor'), 3);
 
-if (empty($datasets)) {
+if (empty($alldatasets)) {
     echo $OUTPUT->notification(get_string('nodatasets', 'block_studentperformancepredictor'), 'warning');
     echo html_writer::link(
-        new moodle_url('/blocks/studentperformancepredictor/admin/managedatasets.php', ['courseid' => $courseid]), 
+        new moodle_url('/blocks/studentperformancepredictor/admin/managedatasets.php', ['courseid' => $courseid]),
         get_string('uploadnewdataset', 'block_studentperformancepredictor'),
         ['class' => 'btn btn-primary']
     );
 } else {
     $form = html_writer::start_tag('form', [
-        'id' => 'spp-train-model-form', 
+        'id' => 'spp-train-model-form',
         'class' => 'form-inline mb-3',
         'method' => 'post',
         'action' => new moodle_url('/blocks/studentperformancepredictor/admin/train_model.php')
@@ -844,8 +894,9 @@ if (empty($datasets)) {
     $form .= html_writer::label(get_string('selectdataset', 'block_studentperformancepredictor'), 'datasetid', true, ['class' => 'mr-2']);
     $form .= html_writer::start_tag('select', ['id' => 'datasetid', 'name' => 'datasetid', 'class' => 'form-control', 'required' => 'required']);
     $form .= html_writer::tag('option', '', ['value' => '']);
-    foreach ($datasets as $dataset) {
-        $form .= html_writer::tag('option', format_string($dataset->name), ['value' => $dataset->id]);
+    foreach ($alldatasets as $dataset) {
+        $display_name = format_string($dataset->name);
+        $form .= html_writer::tag('option', $display_name, ['value' => $dataset->id]);
     }
     $form .= html_writer::end_tag('select');
     $form .= html_writer::end_div();
@@ -895,9 +946,9 @@ if (!empty($models)) {
     foreach ($models as $model) {
         $row = [];
         $row[] = format_string($model->modelname);
-        $row[] = isset($algorithmoptions[$model->algorithmtype]) ? 
+        $row[] = isset($algorithmoptions[$model->algorithmtype]) ?
                   $algorithmoptions[$model->algorithmtype] : $model->algorithmtype;
-                  
+
         if (!empty($model->metrics)) {
             $metrics = json_decode($model->metrics, true);
 
@@ -907,17 +958,19 @@ if (!empty($models)) {
             $overfitting_warning = isset($metrics['overfitting_warning']) ? $metrics['overfitting_warning'] : false;
 
             if ($overfitting_warning) {
-                $row[] = html_writer::tag('span', 
-                    $accuracy . '% (CV: ' . $cv_accuracy . '%)', 
+                $row[] = html_writer::tag('span',
+                    $accuracy . '% (CV: ' . $cv_accuracy . '%)',
                     ['class' => 'badge badge-warning', 'title' => get_string('potentialoverfitting', 'block_studentperformancepredictor')]);
             } else {
-                $row[] = html_writer::tag('span', 
-                    $accuracy . '% (CV: ' . $cv_accuracy . '%)', 
+                $row[] = html_writer::tag('span',
+                    $accuracy . '% (CV: ' . $cv_accuracy . '%)',
                     ['class' => 'badge badge-success']);
             }
         } else {
             $row[] = isset($model->accuracy) ? round($model->accuracy * 100, 2) . '%' : '-';
         }
+
+        $row[] = userdate($model->timemodified);
 
         // Show error message if model failed
         $statuscell = '';
@@ -940,7 +993,7 @@ if (!empty($models)) {
 
         // Add a "View Details" button
         $actions .= html_writer::link(
-            new moodle_url('/blocks/studentperformancepredictor/admin/viewmodel.php', 
+            new moodle_url('/blocks/studentperformancepredictor/admin/viewmodel.php',
                 ['id' => $model->id, 'courseid' => $courseid]),
             get_string('viewdetails', 'block_studentperformancepredictor'),
             ['class' => 'btn btn-sm btn-info mr-1']
@@ -948,7 +1001,7 @@ if (!empty($models)) {
 
         if ($model->active) {
             // Add a deactivate button for the active model
-            $actions = html_writer::start_tag('form', [
+            $actions .= html_writer::start_tag('form', [
                 'action' => new moodle_url('/blocks/studentperformancepredictor/admin/activatemodel.php'),
                 'method' => 'post',
                 'style' => 'display:inline-block;margin:0;'
@@ -976,7 +1029,7 @@ if (!empty($models)) {
             $actions .= html_writer::end_tag('form');
         } else {
             // Use a form for activation to POST to activatemodel.php
-            $actions = html_writer::start_tag('form', [
+            $actions .= html_writer::start_tag('form', [
                 'action' => new moodle_url('/blocks/studentperformancepredictor/admin/activatemodel.php'),
                 'method' => 'post',
                 'style' => 'display:inline-block;margin:0;'
@@ -1057,9 +1110,6 @@ $PAGE->set_title(get_string('refreshpredictions', 'block_studentperformancepredi
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->set_pagelayout('standard');
 
-// Add required JavaScript
-$PAGE->requires->js_call_amd('block_studentperformancepredictor/prediction_viewer', 'init');
-
 // Check if there's an active model.
 $hasactivemodel = block_studentperformancepredictor_has_active_model($courseid);
 
@@ -1072,7 +1122,7 @@ echo $OUTPUT->heading(get_string('refreshpredictions', 'block_studentperformance
 if (!$hasactivemodel) {
     echo $OUTPUT->notification(get_string('noactivemodel', 'block_studentperformancepredictor'), 'warning');
     echo html_writer::link(
-        new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', array('courseid' => $courseid)), 
+        new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', array('courseid' => $courseid)),
         get_string('managemodels', 'block_studentperformancepredictor'),
         array('class' => 'btn btn-primary')
     );
@@ -1081,80 +1131,47 @@ if (!$hasactivemodel) {
     $stats = block_studentperformancepredictor_get_course_risk_stats($courseid);
 
     echo html_writer::start_div('spp-prediction-stats mb-4');
-
     echo html_writer::start_div('card');
     echo html_writer::start_div('card-body');
-
     echo html_writer::tag('h5', get_string('currentpredictionstats', 'block_studentperformancepredictor'), array('class' => 'card-title'));
-
     echo html_writer::start_tag('ul', array('class' => 'list-group list-group-flush'));
     echo html_writer::tag('li', get_string('totalstudents', 'block_studentperformancepredictor') . ': ' . $stats->total, array('class' => 'list-group-item'));
-    echo html_writer::tag('li', get_string('highrisk_label', 'block_studentperformancepredictor') . ': ' . $stats->highrisk . 
+    echo html_writer::tag('li', get_string('highrisk_label', 'block_studentperformancepredictor') . ': ' . $stats->highrisk .
         ' (' . round(($stats->highrisk / max(1, $stats->total)) * 100) . '%)', array('class' => 'list-group-item spp-risk-high'));
-    echo html_writer::tag('li', get_string('mediumrisk_label', 'block_studentperformancepredictor') . ': ' . $stats->mediumrisk . 
+    echo html_writer::tag('li', get_string('mediumrisk_label', 'block_studentperformancepredictor') . ': ' . $stats->mediumrisk .
         ' (' . round(($stats->mediumrisk / max(1, $stats->total)) * 100) . '%)', array('class' => 'list-group-item spp-risk-medium'));
-    echo html_writer::tag('li', get_string('lowrisk_label', 'block_studentperformancepredictor') . ': ' . $stats->lowrisk . 
+    echo html_writer::tag('li', get_string('lowrisk_label', 'block_studentperformancepredictor') . ': ' . $stats->lowrisk .
         ' (' . round(($stats->lowrisk / max(1, $stats->total)) * 100) . '%)', array('class' => 'list-group-item spp-risk-low'));
     echo html_writer::end_tag('ul');
-
     echo html_writer::end_div(); // card-body
     echo html_writer::end_div(); // card
-
     echo html_writer::end_div(); // spp-prediction-stats
 
     // Refresh button and explanation.
     echo html_writer::start_div('spp-refresh-container mb-4');
-
     echo html_writer::tag('p', get_string('refreshexplanation', 'block_studentperformancepredictor'));
-
     echo html_writer::start_div('spp-refresh-action');
     echo html_writer::div(
-        html_writer::tag('button', get_string('refreshallpredictions', 'block_studentperformancepredictor'), 
-                        array('class' => 'btn btn-primary spp-refresh-predictions', 
-                            'data-course-id' => $courseid)),
+        html_writer::tag('button', get_string('refreshallpredictions', 'block_studentperformancepredictor'),
+                        array('class' => 'btn btn-primary spp-refresh-predictions',
+                              'id' => 'refresh-predictions-btn', // Added ID for easier selection
+                              'data-course-id' => $courseid)),
         'spp-refresh-action'
     );
     echo html_writer::end_div();
-
     echo html_writer::end_div();
 
     // Show the last refresh time if available
     $lastrefreshtime = get_config('block_studentperformancepredictor', 'lastrefresh_' . $courseid);
     if (!empty($lastrefreshtime)) {
         echo html_writer::start_div('spp-last-refresh mb-4');
-        echo html_writer::tag('p', get_string('lastrefreshtime', 'block_studentperformancepredictor', userdate($lastrefreshtime)), 
+        echo html_writer::tag('p', get_string('lastrefreshtime', 'block_studentperformancepredictor', userdate($lastrefreshtime)),
             array('class' => 'text-muted'));
-        echo html_writer::end_div();
-    }
-
-    // Get information about students with no predictions (backend-driven)
-    // This count reflects the state after the last backend prediction refresh.
-    $sql = "SELECT COUNT(DISTINCT u.id) 
-            FROM {user} u
-            JOIN {user_enrolments} ue ON ue.userid = u.id
-            JOIN {enrol} e ON e.id = ue.enrolid
-            LEFT JOIN {block_spp_predictions} p ON p.userid = u.id AND p.courseid = :courseid
-            WHERE e.courseid = :courseid2
-            AND p.id IS NULL";
-
-    $params = [
-        'courseid' => $courseid,
-        'courseid2' => $courseid
-    ];
-
-    $studentswithoutpredictions = $DB->count_records_sql($sql, $params);
-
-    if ($studentswithoutpredictions > 0) {
-        echo html_writer::start_div('spp-missing-predictions');
-        echo $OUTPUT->notification(
-            get_string('studentswithoutpredictions_backend', 'block_studentperformancepredictor', $studentswithoutpredictions), 
-            'info'
-        );
         echo html_writer::end_div();
     }
 }
 
-// At the end, add navigation buttons
+// Navigation buttons
 echo '<div class="btn-group mt-3" role="group">';
 echo html_writer::link(
     new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', ['courseid' => $courseid]),
@@ -1175,6 +1192,50 @@ echo '</div>';
 
 // Output footer.
 echo $OUTPUT->footer();
+
+// Inline JavaScript to handle the button click
+?>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        var refreshButton = document.getElementById('refresh-predictions-btn');
+        if (refreshButton) {
+            refreshButton.addEventListener('click', function(e) {
+                e.preventDefault();
+
+                if (confirm("<?php echo get_string('refreshconfirmation', 'block_studentperformancepredictor'); ?>")) {
+                    var courseId = this.getAttribute('data-course-id');
+                    var originalText = this.textContent;
+                    this.disabled = true;
+                    this.textContent = "<?php echo get_string('refreshing', 'block_studentperformancepredictor'); ?>...";
+
+                    // Using Moodle's built-in fetch for AJAX
+                    require(['core/ajax'], function(ajax) {
+                        var promises = ajax.call([{
+                            methodname: 'block_studentperformancepredictor_refresh_predictions',
+                            args: { courseid: courseId },
+                            done: function(response) {
+                                if (response.status) {
+                                    alert("<?php echo get_string('predictionsrefreshqueued', 'block_studentperformancepredictor'); ?>");
+                                    // Optionally, you can reload the page to see the updated status
+                                    window.location.reload();
+                                } else {
+                                    alert("<?php echo get_string('predictionsrefresherror', 'block_studentperformancepredictor'); ?>: " + response.message);
+                                    refreshButton.disabled = false;
+                                    refreshButton.textContent = originalText;
+                                }
+                            },
+                            fail: function(ex) {
+                                alert("<?php echo get_string('refresherror', 'block_studentperformancepredictor'); ?>: " + ex);
+                                refreshButton.disabled = false;
+                                refreshButton.textContent = originalText;
+                            }
+                        }]);
+                    });
+                }
+            });
+        }
+    });
+</script>
 
 <?php
 // blocks/studentperformancepredictor/admin/testbackend.php
@@ -1303,7 +1364,6 @@ echo $OUTPUT->footer();
 <?php
 // blocks/studentperformancepredictor/admin/train_model.php
 
-// Basic Moodle config
 require(__DIR__ . '/../../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
 require_once($CFG->libdir . '/moodlelib.php');
@@ -1317,365 +1377,68 @@ $courseid = required_param('courseid', PARAM_INT);
 $datasetid = required_param('datasetid', PARAM_INT);
 $algorithm = optional_param('algorithm', null, PARAM_ALPHANUMEXT);
 
+// Define the redirect URL
+$redirecturl = new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', ['courseid' => $courseid]);
+
 // Security checks first
 require_login();
 require_sesskey();
 
-// Determine redirect URL based on course
-$redirect_url = ($courseid == 0) 
-    ? new moodle_url('/blocks/studentperformancepredictor/admin/trainglobalmodel.php')
-    : new moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', ['courseid' => $courseid]);
-
-// Set up page and context
-if ($courseid == 0) {
-    // Global model - need site admin permission
-    admin_externalpage_setup('blocksettingstudentperformancepredictor');
-    require_capability('moodle/site:config', context_system::instance());
-
-    // Set up URL
-    $url = new moodle_url('/blocks/studentperformancepredictor/admin/train_model.php', ['courseid' => 0]);
-    $PAGE->set_url($url);
-    $PAGE->set_context(context_system::instance());
-
-    // Check if global models are enabled
-    if (!get_config('block_studentperformancepredictor', 'enableglobalmodel')) {
-        \core\notification::add(
-            get_string('globalmodeldisabled', 'block_studentperformancepredictor'),
-            \core\notification::ERROR
-        );
-        redirect($redirect_url);
-    }
-
-    // Set up page title for global model
-    $PAGE->set_title(get_string('trainglobalmodel', 'block_studentperformancepredictor'));
-    $PAGE->set_heading(get_string('trainglobalmodel', 'block_studentperformancepredictor'));
-    $PAGE->set_pagelayout('admin');
-
-    // Verify dataset exists (for global model it can be from any course)
-    if (!$DB->record_exists('block_spp_datasets', ['id' => $datasetid])) {
-        \core\notification::add(
-            get_string('dataset_not_found', 'block_studentperformancepredictor'),
-            \core\notification::ERROR
-        );
-        redirect($redirect_url);
-    }
-} else {
-    // Course-specific model
-    $course = get_course($courseid);
+// Set up context for permission checks
+if ($courseid > 0) {
     $coursecontext = context_course::instance($courseid);
-
-    // Check capability and require login with the course
-    require_login($course);
     require_capability('block/studentperformancepredictor:managemodels', $coursecontext);
-
-    // Set up page with the course context
-    $url = new moodle_url('/blocks/studentperformancepredictor/admin/train_model.php', ['courseid' => $courseid]);
-    $PAGE->set_url($url);
-    $PAGE->set_context($coursecontext);
-
-    // Set up page title
-    $PAGE->set_title($course->shortname . ': ' . get_string('training_model', 'block_studentperformancepredictor'));
-    $PAGE->set_heading($course->fullname);
-
-    // Verify dataset exists and belongs to the course
-    if (!$DB->record_exists('block_spp_datasets', ['id' => $datasetid, 'courseid' => $courseid])) {
-        \core\notification::add(
-            get_string('dataset_not_found', 'block_studentperformancepredictor'),
-            \core\notification::ERROR
-        );
-        redirect($redirect_url);
-    }
+} else {
+    // This case is for global models, but we keep the permission check for robustness.
+    require_capability('moodle/site:config', context_system::instance());
 }
-
-// Check for pending training
-if (training_manager::has_pending_training($courseid)) {
-    \core\notification::add(
-        get_string('training_already_scheduled', 'block_studentperformancepredictor'),
-        \core\notification::WARNING
-    );
-    redirect($redirect_url);
-}
-
-// Schedule training (backend-driven orchestration)
-$success = false;
-$error_message = '';
 
 try {
-    // This will queue a training task that calls the Python backend /train endpoint
+    // Verify dataset exists (it can be from any course)
+    if (!$DB->record_exists('block_spp_datasets', ['id' => $datasetid])) {
+        throw new \moodle_exception('dataset_not_found', 'block_studentperformancepredictor');
+    }
+
+    // Check for pending training to avoid duplicate tasks
+    if (training_manager::has_pending_training($courseid)) {
+        throw new \moodle_exception('training_already_scheduled', 'block_studentperformancepredictor');
+    }
+
+    // Schedule the training task
     $success = training_manager::schedule_training($courseid, $datasetid, $algorithm);
+
     if (!$success) {
-        $error_message = get_string('trainingschedulefailed', 'block_studentperformancepredictor');
+        throw new \moodle_exception('trainingschedulefailed', 'block_studentperformancepredictor');
     }
-} catch (\Exception $e) {
-    $success = false;
-    $error_message = $e->getMessage();
-}
 
-// Add appropriate notification - we will store this in session before redirecting
-if ($success) {
+    // Success notification can be helpful, but it's optional. The main goal is the redirect.
     \core\notification::success(get_string('model_training_queued_backend', 'block_studentperformancepredictor'));
-} else {
-    \core\notification::error($error_message);
+
+} catch (\Exception $e) {
+    // If there's an error, add it as a notification and then redirect.
+    \core\notification::error($e->getMessage());
 }
 
-// Redirect back to appropriate page
-redirect($redirect_url);
-
-<?php
-// blocks/studentperformancepredictor/admin/trainglobalmodel.php
-
-require_once('../../../config.php');
-require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
-require_once($CFG->libdir . '/adminlib.php');
-
-// Check global admin context
-admin_externalpage_setup('blocksettingstudentperformancepredictor');
-require_capability('moodle/site:config', context_system::instance());
-
-// Set up page
-$PAGE->set_url(new moodle_url('/blocks/studentperformancepredictor/admin/trainglobalmodel.php'));
-$PAGE->set_context(context_system::instance());
-$PAGE->set_title(get_string('trainglobalmodel', 'block_studentperformancepredictor'));
-$PAGE->set_heading(get_string('trainglobalmodel', 'block_studentperformancepredictor'));
-$PAGE->set_pagelayout('admin');
-
-// Initialize admin interface JavaScript
-$PAGE->requires->js_call_amd('block_studentperformancepredictor/admin_interface', 'init', [0]);
-
-// Output starts here
-echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('trainglobalmodel', 'block_studentperformancepredictor'));
-
-// Check if global models are enabled
-if (!get_config('block_studentperformancepredictor', 'enableglobalmodel')) {
-    echo $OUTPUT->notification(get_string('globalmodeldisabled', 'block_studentperformancepredictor'), 'error');
-    echo html_writer::link(
-        new moodle_url('/admin/settings.php', ['section' => 'blocksettingstudentperformancepredictor']),
-        get_string('enableglobalmodelsettings', 'block_studentperformancepredictor'),
-        ['class' => 'btn btn-primary']
-    );
-    echo $OUTPUT->footer();
-    exit;
-}
-
-// Get all available datasets from all courses
-$datasets = [];
-$sql = "SELECT d.*, c.fullname as coursename 
-        FROM {block_spp_datasets} d
-        JOIN {course} c ON d.courseid = c.id
-        ORDER BY d.timemodified DESC";
-$alldatasets = $DB->get_records_sql($sql);
-
-// Get algorithm options
-$algorithmoptions = [
-    'randomforest' => get_string('algorithm_randomforest', 'block_studentperformancepredictor'),
-    'svm' => get_string('algorithm_svm', 'block_studentperformancepredictor'),
-    'logisticregression' => get_string('algorithm_logisticregression', 'block_studentperformancepredictor'),
-    'decisiontree' => get_string('algorithm_decisiontree', 'block_studentperformancepredictor'),
-    'knn' => get_string('algorithm_knn', 'block_studentperformancepredictor')
-];
-
-// Display explanation
-echo html_writer::div(
-    get_string('trainglobalmodel_desc', 'block_studentperformancepredictor'),
-    'alert alert-info'
-);
-
-// Display form for dataset selection and training
-echo html_writer::start_tag('form', [
-    'id' => 'spp-train-global-model-form',
-    'class' => 'mb-4',
-    'method' => 'post',
-    'action' => new moodle_url('/blocks/studentperformancepredictor/admin/train_model.php')
-]);
-
-// Dataset selection
-echo html_writer::start_div('form-group');
-echo html_writer::label(get_string('selectdataset', 'block_studentperformancepredictor'), 'datasetid', true);
-echo html_writer::start_tag('select', ['id' => 'datasetid', 'name' => 'datasetid', 'class' => 'form-control', 'required' => 'required']);
-echo html_writer::tag('option', '', ['value' => '']);
-foreach ($alldatasets as $dataset) {
-    echo html_writer::tag('option', 
-        format_string($dataset->name) . ' (' . format_string($dataset->coursename) . ')', 
-        ['value' => $dataset->id]
-    );
-}
-echo html_writer::end_tag('select');
-echo html_writer::end_div();
-
-// Algorithm selection
-echo html_writer::start_div('form-group');
-echo html_writer::label(get_string('selectalgorithm', 'block_studentperformancepredictor'), 'algorithm', true);
-echo html_writer::start_tag('select', ['id' => 'algorithm', 'name' => 'algorithm', 'class' => 'form-control']);
-foreach ($algorithmoptions as $value => $label) {
-    echo html_writer::tag('option', $label, ['value' => $value]);
-}
-echo html_writer::end_tag('select');
-echo html_writer::end_div();
-
-// Hidden fields
-echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
-echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'courseid', 'value' => 0]); // 0 = global model
-
-// Submit button
-echo html_writer::start_div('form-group');
-echo html_writer::empty_tag('input', [
-    'type' => 'submit',
-    'value' => get_string('trainglobalmodel', 'block_studentperformancepredictor'),
-    'class' => 'btn btn-primary'
-]);
-echo html_writer::end_div();
-
-echo html_writer::end_tag('form');
-
-// Get existing global models
-$globalmodels = $DB->get_records('block_spp_models', ['courseid' => 0], 'timemodified DESC');
-
-// Display existing global models
-if (!empty($globalmodels)) {
-    echo $OUTPUT->heading(get_string('existingglobalmodels', 'block_studentperformancepredictor'), 3);
-
-    $table = new html_table();
-    $table->head = [
-        get_string('modelname', 'block_studentperformancepredictor'),
-        get_string('algorithm', 'block_studentperformancepredictor'),
-        get_string('accuracy', 'block_studentperformancepredictor'),
-        get_string('created', 'block_studentperformancepredictor'),
-        get_string('status', 'block_studentperformancepredictor'),
-        get_string('actions', 'block_studentperformancepredictor')
-    ];
-
-    foreach ($globalmodels as $model) {
-        $row = [];
-        $row[] = format_string($model->modelname);
-        $row[] = isset($algorithmoptions[$model->algorithmtype]) ? 
-                  $algorithmoptions[$model->algorithmtype] : $model->algorithmtype;
-        $row[] = isset($model->accuracy) ? round($model->accuracy * 100, 2) . '%' : '-';
-        $row[] = userdate($model->timemodified);
-
-        // Status
-        if ($model->trainstatus === 'failed') {
-            $statusclass = 'badge badge-danger';
-            $statustext = get_string('failed', 'block_studentperformancepredictor');
-            $errordiv = !empty($model->errormessage) 
-                ? html_writer::div($model->errormessage, 'text-danger small')
-                : '';
-            $row[] = html_writer::tag('span', $statustext, ['class' => $statusclass]) . $errordiv;
-        } else if ($model->active) {
-            $row[] = html_writer::tag('span', get_string('active', 'block_studentperformancepredictor'), 
-                                     ['class' => 'badge badge-success']);
-        } else {
-            $row[] = html_writer::tag('span', get_string('inactive', 'block_studentperformancepredictor'), 
-                                     ['class' => 'badge badge-secondary']);
-        }
-
-        // Actions
-        if ($model->active) {
-            $actions = html_writer::start_tag('form', [
-                'action' => new moodle_url('/blocks/studentperformancepredictor/admin/activatemodel.php'),
-                'method' => 'post',
-                'style' => 'display:inline-block;margin:0;'
-            ]);
-            $actions .= html_writer::empty_tag('input', [
-                'type' => 'hidden',
-                'name' => 'deactivate',
-                'value' => 1
-            ]);
-            $actions .= html_writer::empty_tag('input', [
-                'type' => 'hidden',
-                'name' => 'courseid',
-                'value' => 0
-            ]);
-            $actions .= html_writer::empty_tag('input', [
-                'type' => 'hidden',
-                'name' => 'sesskey',
-                'value' => sesskey()
-            ]);
-            $actions .= html_writer::empty_tag('input', [
-                'type' => 'submit',
-                'value' => get_string('deactivate', 'block_studentperformancepredictor'),
-                'class' => 'btn btn-sm btn-secondary'
-            ]);
-            $actions .= html_writer::end_tag('form');
-        } else {
-            $actions = html_writer::start_tag('form', [
-                'action' => new moodle_url('/blocks/studentperformancepredictor/admin/activatemodel.php'),
-                'method' => 'post',
-                'style' => 'display:inline-block;margin:0;'
-            ]);
-            $actions .= html_writer::empty_tag('input', [
-                'type' => 'hidden',
-                'name' => 'modelid',
-                'value' => $model->id
-            ]);
-            $actions .= html_writer::empty_tag('input', [
-                'type' => 'hidden',
-                'name' => 'courseid',
-                'value' => 0
-            ]);
-            $actions .= html_writer::empty_tag('input', [
-                'type' => 'hidden',
-                'name' => 'sesskey',
-                'value' => sesskey()
-            ]);
-            $actions .= html_writer::empty_tag('input', [
-                'type' => 'submit',
-                'value' => get_string('activate', 'block_studentperformancepredictor'),
-                'class' => 'btn btn-sm btn-primary'
-            ]);
-            $actions .= html_writer::end_tag('form');
-        }
-
-        $row[] = $actions;
-        $table->data[] = $row;
-    }
-
-    echo html_writer::table($table);
-}
-
-// Link back to admin page
-echo html_writer::div(
-    html_writer::link(
-        new moodle_url('/admin/settings.php', ['section' => 'blocksettingstudentperformancepredictor']),
-        get_string('backsettings', 'block_studentperformancepredictor'),
-        ['class' => 'btn btn-secondary']
-    ),
-    'mt-3'
-);
-
-echo $OUTPUT->footer();
+// Redirect back to the manage models page in all cases (success or failure).
+redirect($redirecturl);
 
 <?php
 // blocks/studentperformancepredictor/admin/upload_dataset.php
 
-define('AJAX_SCRIPT', true);
 require_once('../../../config.php');
 require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
-require_once($CFG->libdir . '/moodlelib.php'); // For get_string, required_param, optional_param, require_sesskey, clean_filename
-require_once($CFG->libdir . '/accesslib.php'); // For get_course, context_course, require_capability
-require_once($CFG->libdir . '/enrollib.php'); // For require_login
-require_once($CFG->libdir . '/filelib.php'); // For file handling
-require_once($CFG->libdir . '/adminlib.php'); // For admin functions
-require_once($CFG->libdir . '/weblib.php'); // For web utilities
-
-// Set up response array
-$response = array(
-    'success' => false,
-    'message' => ''
-);
-
-// Check if this is a POST request
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    $response['message'] = get_string('invalidrequest', 'block_studentperformancepredictor');
-    echo json_encode($response);
-    die();
-}
+require_once($CFG->libdir . '/moodlelib.php');
+require_once($CFG->libdir . '/accesslib.php');
+require_once($CFG->libdir . '/filelib.php');
 
 // Get parameters
 $courseid = required_param('courseid', PARAM_INT);
 $datasetname = required_param('dataset_name', PARAM_TEXT);
 $datasetformat = required_param('dataset_format', PARAM_ALPHA);
 $datasetdesc = optional_param('dataset_description', '', PARAM_TEXT);
+
+// Set up redirect URL
+$redirecturl = new moodle_url('/blocks/studentperformancepredictor/admin/managedatasets.php', ['courseid' => $courseid]);
 
 // Validate session key
 require_sesskey();
@@ -1690,9 +1453,8 @@ require_capability('block/studentperformancepredictor:managemodels', $context);
 
 // Verify file upload
 if (!isset($_FILES['dataset_file']) || empty($_FILES['dataset_file']['name'])) {
-    $response['message'] = get_string('nofileuploaded', 'block_studentperformancepredictor');
-    echo json_encode($response);
-    die();
+    \core\notification::error(get_string('nofileuploaded', 'block_studentperformancepredictor'));
+    redirect($redirecturl);
 }
 
 $file = $_FILES['dataset_file'];
@@ -1712,61 +1474,46 @@ if ($file['error'] !== UPLOAD_ERR_OK) {
             $errormessage = get_string('nofileuploaded', 'block_studentperformancepredictor');
             break;
     }
-    $response['message'] = $errormessage;
-    echo json_encode($response);
-    die();
+    \core\notification::error($errormessage);
+    redirect($redirecturl);
 }
 
 // Check file extension
 $filename = $file['name'];
 $extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
 
-if ($datasetformat === 'csv' && $extension !== 'csv') {
-    $response['message'] = get_string('invalidfileextension', 'block_studentperformancepredictor');
-    echo json_encode($response);
-    die();
-} else if ($datasetformat === 'json' && $extension !== 'json') {
-    $response['message'] = get_string('invalidfileextension', 'block_studentperformancepredictor');
-    echo json_encode($response);
-    die();
+if (($datasetformat === 'csv' && $extension !== 'csv') || ($datasetformat === 'json' && $extension !== 'json')) {
+    \core\notification::error(get_string('invalidfileextension', 'block_studentperformancepredictor'));
+    redirect($redirecturl);
 }
 
 // Create dataset directory
 try {
     $datasetdir = block_studentperformancepredictor_ensure_dataset_directory($courseid);
 } catch (Exception $e) {
-    $response['message'] = $e->getMessage();
-    echo json_encode($response);
-    die();
+    \core\notification::error($e->getMessage());
+    redirect($redirecturl);
 }
 
 // Store the file with a unique name
 $newfilename = $courseid . '_' . time() . '_' . clean_filename($filename);
 $filepath = $datasetdir . '/' . $newfilename;
 
-// Make sure directory has proper permissions for Railway deployment
-if (is_dir($datasetdir)) {
-    chmod($datasetdir, 0777); // Set directory permissions
-}
-
 if (!move_uploaded_file($file['tmp_name'], $filepath)) {
-    $response['message'] = get_string('fileuploadfailed', 'block_studentperformancepredictor');
-    echo json_encode($response);
-    die();
+    \core\notification::error(get_string('fileuploadfailed', 'block_studentperformancepredictor'));
+    redirect($redirecturl);
 }
-
-// Make sure the uploaded file has the right permissions
-chmod($filepath, 0666); // Set file permissions for Railway compatibility
 
 // Extract column headers
 $columns = array();
-
 if ($datasetformat === 'csv') {
     $handle = fopen($filepath, 'r');
     if ($handle !== false) {
         $headers = fgetcsv($handle);
-        foreach ($headers as $header) {
-            $columns[] = $header;
+        if ($headers) {
+            foreach ($headers as $header) {
+                $columns[] = $header;
+            }
         }
         fclose($handle);
     }
@@ -1775,7 +1522,9 @@ if ($datasetformat === 'csv') {
     $jsonData = json_decode($content, true);
     if (is_array($jsonData) && !empty($jsonData)) {
         $firstRow = reset($jsonData);
-        $columns = array_keys($firstRow);
+        if (is_array($firstRow)) {
+            $columns = array_keys($firstRow);
+        }
     }
 }
 
@@ -1793,19 +1542,13 @@ $dataset->usermodified = $USER->id;
 
 try {
     $datasetid = $DB->insert_record('block_spp_datasets', $dataset);
-    $response['success'] = true;
-    $response['message'] = get_string('datasetsaved_backend', 'block_studentperformancepredictor');
-    $response['datasetid'] = $datasetid;
+    \core\notification::success(get_string('datasetsaved_backend', 'block_studentperformancepredictor'));
 } catch (Exception $e) {
-    $response['message'] = get_string('datasetsaveerror', 'block_studentperformancepredictor') . ': ' . $e->getMessage();
-    if (function_exists('debugging')) {
-        debugging('Dataset upload error: ' . $e->getMessage(), defined('DEBUG_DEVELOPER') ? DEBUG_DEVELOPER : 0);
-    }
+    \core\notification::error(get_string('datasetsaveerror', 'block_studentperformancepredictor') . ': ' . $e->getMessage());
 }
 
-// Return JSON response
-// All orchestration is backend-driven
-echo json_encode($response);
+// Redirect back to the manage datasets page
+redirect($redirecturl);
 
 <?php
 // blocks/studentperformancepredictor/admin/viewdataset.php
@@ -1930,10 +1673,10 @@ $table->head = [
 $table->data = [];
 
 $table->data[] = [get_string('modelname', 'block_studentperformancepredictor'), format_string($model->modelname)];
-$table->data[] = [get_string('algorithm', 'block_studentperformancepredictor'), isset($algorithmoptions[$model->algorithmtype]) ? 
+$table->data[] = [get_string('algorithm', 'block_studentperformancepredictor'), isset($algorithmoptions[$model->algorithmtype]) ?
     $algorithmoptions[$model->algorithmtype] : $model->algorithmtype];
 $table->data[] = [get_string('created', 'block_studentperformancepredictor'), userdate($model->timecreated)];
-$table->data[] = [get_string('status', 'block_studentperformancepredictor'), 
+$table->data[] = [get_string('status', 'block_studentperformancepredictor'),
     $model->active ? get_string('active', 'block_studentperformancepredictor') : get_string('inactive', 'block_studentperformancepredictor')];
 $table->data[] = [get_string('trainstatus', 'block_studentperformancepredictor'), ucfirst($model->trainstatus)];
 
@@ -1952,30 +1695,30 @@ if (!empty($model->metrics)) {
     $acc_data = new stdClass();
     $acc_data->accuracy = round(($metrics['accuracy'] ?? 0) * 100, 2);
     $acc_data->cv_accuracy = round(($metrics['cv_accuracy'] ?? 0) * 100, 2);
-    echo html_writer::tag('li', 
+    echo html_writer::tag('li',
         get_string('modelaccuracydetail', 'block_studentperformancepredictor', $acc_data),
         ['class' => 'list-group-item' . (($metrics['overfitting_warning'] ?? false) ? ' list-group-item-warning' : '')]);
 
     // Other metrics
     if (isset($metrics['precision'])) {
-        echo html_writer::tag('li', get_string('metrics_precision', 'block_studentperformancepredictor') . ': ' . 
+        echo html_writer::tag('li', get_string('metrics_precision', 'block_studentperformancepredictor') . ': ' .
             round($metrics['precision'] * 100, 2) . '%', ['class' => 'list-group-item']);
     }
     if (isset($metrics['recall'])) {
-        echo html_writer::tag('li', get_string('metrics_recall', 'block_studentperformancepredictor') . ': ' . 
+        echo html_writer::tag('li', get_string('metrics_recall', 'block_studentperformancepredictor') . ': ' .
             round($metrics['recall'] * 100, 2) . '%', ['class' => 'list-group-item']);
     }
     if (isset($metrics['f1'])) {
-        echo html_writer::tag('li', get_string('metrics_f1', 'block_studentperformancepredictor') . ': ' . 
+        echo html_writer::tag('li', get_string('metrics_f1', 'block_studentperformancepredictor') . ': ' .
             round($metrics['f1'] * 100, 2) . '%', ['class' => 'list-group-item']);
     }
     if (isset($metrics['roc_auc'])) {
-        echo html_writer::tag('li', get_string('metrics_roc_auc', 'block_studentperformancepredictor') . ': ' . 
+        echo html_writer::tag('li', get_string('metrics_roc_auc', 'block_studentperformancepredictor') . ': ' .
             round($metrics['roc_auc'], 3), ['class' => 'list-group-item']);
     }
     if (isset($metrics['overfitting_ratio'])) {
-        echo html_writer::tag('li', get_string('metrics_overfitting_ratio', 'block_studentperformancepredictor') . ': ' . 
-            round($metrics['overfitting_ratio'], 2), 
+        echo html_writer::tag('li', get_string('metrics_overfitting_ratio', 'block_studentperformancepredictor') . ': ' .
+            round($metrics['overfitting_ratio'], 2),
             ['class' => 'list-group-item' . ($metrics['overfitting_warning'] ? ' list-group-item-warning' : '')]);
     }
 
@@ -1987,8 +1730,8 @@ if (!empty($model->metrics)) {
 
         echo html_writer::start_tag('ul', ['class' => 'list-group']);
         foreach ($metrics['top_features'] as $feature => $importance) {
-            echo html_writer::tag('li', 
-                $feature . ': ' . round($importance * 100, 2) . '%', 
+            echo html_writer::tag('li',
+                $feature . ': ' . round($importance * 100, 2) . '%',
                 ['class' => 'list-group-item']);
         }
         echo html_writer::end_tag('ul');
@@ -2006,14 +1749,14 @@ if ($model->trainstatus == 'failed' && !empty($model->errormessage)) {
 echo html_writer::start_div('mt-4');
 if (!$model->active) {
     echo html_writer::link(
-        new moodle_url('/blocks/studentperformancepredictor/admin/activatemodel.php', 
+        new moodle_url('/blocks/studentperformancepredictor/admin/activatemodel.php',
             ['modelid' => $model->id, 'courseid' => $courseid, 'sesskey' => sesskey()]),
         get_string('activate', 'block_studentperformancepredictor'),
         ['class' => 'btn btn-primary']
     );
 } else {
     echo html_writer::link(
-        new moodle_url('/blocks/studentperformancepredictor/admin/activatemodel.php', 
+        new moodle_url('/blocks/studentperformancepredictor/admin/activatemodel.php',
             ['deactivate' => 1, 'courseid' => $courseid, 'sesskey' => sesskey()]),
         get_string('deactivate', 'block_studentperformancepredictor'),
         ['class' => 'btn btn-secondary']
@@ -2531,213 +2274,29 @@ if ($courseid) {
 
 echo $OUTPUT->footer();
 
-// blocks/studentperformancepredictor/amd/src/admin_dashboard.js
-
-define(['jquery'], function($) {
-
-    /**
-     * Initialize the admin dashboard
-     */
-    var init = function() {
-        // Handle risk category card collapsing
-        $('.spp-risk-card .card-header').on('click', function() {
-            var $header = $(this);
-            var $card = $header.closest('.card');
-            var $collapseSection = $card.find('.collapse');
-            var $indicator = $header.find('.collapse-indicator i');
-
-            // Toggle the collapse section directly
-            $collapseSection.collapse('toggle');
-
-            // Update the collapse indicator icon on shown/hidden events
-            $collapseSection.on('shown.bs.collapse', function() {
-                $indicator.removeClass('fa-chevron-down').addClass('fa-chevron-up');
-            });
-
-            $collapseSection.on('hidden.bs.collapse', function() {
-                $indicator.removeClass('fa-chevron-up').addClass('fa-chevron-down');
-            });
-        });
-    };
-
-    return {
-        init: init
-    };
-});
-
 // blocks/studentperformancepredictor/amd/src/admin_interface.js
 
-define(['jquery'], function($) {
-
-    /**
-     * Initialize the admin dashboard
-     */
-    var init = function() {
-        // Handle risk category card collapsing
-        $('.spp-risk-card .card-header').on('click', function() {
-            var $header = $(this);
-            var $card = $header.closest('.card');
-            var $collapseSection = $card.find('.collapse');
-            var $indicator = $header.find('.collapse-indicator i');
-
-            // Toggle the collapse section directly
-            $collapseSection.collapse('toggle');
-
-            // Update the collapse indicator icon on shown/hidden events
-            $collapseSection.on('shown.bs.collapse', function() {
-                $indicator.removeClass('fa-chevron-down').addClass('fa-chevron-up');
-            });
-
-            $collapseSection.on('hidden.bs.collapse', function() {
-                $indicator.removeClass('fa-chevron-up').addClass('fa-chevron-down');
-            });
-        });
-    };
-
-    return {
-        init: init
-    };
-});
-define(['jquery', 'core/ajax', 'core/str', 'core/notification', 'core/modal_factory', 'core/modal_events'], 
+define(['jquery', 'core/ajax', 'core/str', 'core/notification', 'core/modal_factory', 'core/modal_events'],
 function($, Ajax, Str, Notification, ModalFactory, ModalEvents) {
 
     /**
      * Initialize admin interface.
-     * 
-     * @param {int} courseId Course ID
+     * * @param {int} courseId Course ID
      */
     var init = function(courseId) {
         try {
-            // Handle dataset upload form
-            $('#spp-dataset-upload-form').on('submit', function(e) {
-                e.preventDefault();
+            // Handle model training form submission state
+            $('#spp-train-model-form').on('submit', function() {
+                var form = $(this);
+                var submitButton = form.find('input[type="submit"]');
 
-                // Validate form
-                var form = $(this)[0];
-                if (!form.checkValidity()) {
-                    if (typeof form.reportValidity === 'function') {
-                        form.reportValidity();
-                    }
-                    return;
-                }
-
-                var formData = new FormData(form);
-                var submitButton = $(this).find('input[type="submit"]');
-                var originalText = submitButton.val();
-                submitButton.prop('disabled', true);
-
-                // Load 'uploading' string asynchronously for button and status
-                Str.get_string('uploading', 'moodle').done(function(uploadingStr) {
-                    submitButton.val(uploadingStr);
-                    $('#spp-upload-status').html(
-                        '<div class="spp-loading"><i class="fa fa-spinner fa-spin"></i>' + uploadingStr + '</div>'
-                    );
-                }).fail(function() {
-                    submitButton.val('Uploading...');
-                    $('#spp-upload-status').html(
-                        '<div class="spp-loading"><i class="fa fa-spinner fa-spin"></i>Uploading...</div>'
-                    );
-                });
-
-                $.ajax({
-                    url: M.cfg.wwwroot + '/blocks/studentperformancepredictor/admin/upload_dataset.php',
-                    type: 'POST',
-                    data: formData,
-                    contentType: false,
-                    processData: false,
-                    success: function(response) {
-                        submitButton.prop('disabled', false);
-                        submitButton.val(originalText);
-                        $('#spp-upload-status').empty();
-
-                        try {
-                            // Properly handle response which might be string or object
-                            var responseData;
-                            if (typeof response === 'string') {
-                                try {
-                                    responseData = JSON.parse(response);
-                                } catch (e) {
-                                    console.error('Invalid JSON response', response);
-                                    Notification.exception(new Error('Invalid server response'));
-                                    return;
-                                }
-                            } else {
-                                responseData = response;
-                            }
-
-                            if (responseData && responseData.success) {
-                                // Show success message
-                                var msg = responseData.message;
-                                if (!msg) {
-                                    Str.get_string('datasetsaved', 'block_studentperformancepredictor').done(function(s) {
-                                        Notification.addNotification({ message: s, type: 'success' });
-                                    });
-                                } else {
-                                    Notification.addNotification({ message: msg, type: 'success' });
-                                }
-                                setTimeout(function() { window.location.reload(); }, 1500);
-                            } else {
-                                var msg = responseData ? responseData.message : '';
-                                if (!msg) {
-                                    Str.get_string('datasetsaveerror', 'block_studentperformancepredictor').done(function(s) {
-                                        Notification.addNotification({ message: s, type: 'error' });
-                                    });
-                                } else {
-                                    Notification.addNotification({ message: msg, type: 'error' });
-                                }
-                            }
-                        } catch (e) {
-                            console.error('Error handling response:', e);
-                            Str.get_string('datasetsaveerror', 'block_studentperformancepredictor').done(function(s) {
-                                Notification.addNotification({ message: s, type: 'error' });
-                            });
-                        }
-                    },
-                    error: function(xhr, status, error) {
-                        console.error('AJAX error:', status, error);
-                        submitButton.prop('disabled', false);
-                        submitButton.val(originalText);
-                        $('#spp-upload-status').empty();
-
-                        // Get response error message if available
-                        var errorMessage = error;
-                        try {
-                            var response = JSON.parse(xhr.responseText);
-                            if (response && response.message) {
-                                errorMessage = response.message;
-                            }
-                        } catch (e) {
-                            // Use default error message if JSON parsing fails
-                        }
-
-                        Str.get_string('uploaderror', 'block_studentperformancepredictor').done(function(s) {
-                            Notification.addNotification({ message: s + ': ' + errorMessage, type: 'error' });
-                        });
-                    }
-                });
-            });
-
-            // Handle model training form
-            $('#spp-train-model-form').on('submit', function(e) {
-                e.preventDefault();
-                var datasetId = $('#datasetid').val();
-                var algorithm = $('#algorithm').val();
-                if (!datasetId) {
-                    Str.get_string('selectdataset', 'block_studentperformancepredictor').done(function(s) {
-                        Notification.addNotification({ message: s, type: 'error' });
-                    });
-                    return;
-                }
-                var submitButton = $(this).find('input[type="submit"]');
+                // Disable the button and show a "training" message to prevent multiple submissions.
+                // The form will then submit normally, and the browser will be redirected by the PHP script.
                 var originalText = submitButton.val();
                 submitButton.prop('disabled', true);
                 Str.get_string('training', 'block_studentperformancepredictor').done(function(trainingStr) {
-                    submitButton.val(trainingStr);
+                    submitButton.val(trainingStr + '...');
                 });
-
-                // Using traditional form submission for better file handling compatibility
-                var form = $(this)[0];
-                form.submit();
             });
 
             // Handle dataset deletion
@@ -2746,6 +2305,7 @@ function($, Ajax, Str, Notification, ModalFactory, ModalEvents) {
 
                 var button = $(this);
                 var datasetId = button.data('dataset-id');
+                var datasetCourseId = button.data('course-id');
 
                 button.prop('disabled', true);
 
@@ -2769,18 +2329,15 @@ function($, Ajax, Str, Notification, ModalFactory, ModalEvents) {
                                 type: 'POST',
                                 data: {
                                     datasetid: datasetId,
-                                    courseid: courseId,
+                                    courseid: datasetCourseId,
                                     sesskey: M.cfg.sesskey
                                 },
                                 dataType: 'json',
                                 success: function(response) {
                                     if (response.success) {
-                                        // Reload page to update dataset list.
                                         window.location.reload();
                                     } else {
                                         button.prop('disabled', false);
-
-                                        // Show error message.
                                         Notification.addNotification({
                                             message: response.message,
                                             type: 'error'
@@ -2789,19 +2346,13 @@ function($, Ajax, Str, Notification, ModalFactory, ModalEvents) {
                                 },
                                 error: function(xhr, status, error) {
                                     button.prop('disabled', false);
-
-                                    // Try to parse error message from response
                                     var errorMessage = error;
                                     try {
-                                        var response = JSON.parse(xhr.responseText);
-                                        if (response && response.message) {
-                                            errorMessage = response.message;
+                                        var resp = JSON.parse(xhr.responseText);
+                                        if (resp && resp.message) {
+                                            errorMessage = resp.message;
                                         }
-                                    } catch (e) {
-                                        // Use default error message
-                                    }
-
-                                    // Show error message.
+                                    } catch (e) {}
                                     Str.get_string('actionerror', 'block_studentperformancepredictor').done(function(s) {
                                         Notification.addNotification({
                                             message: s + ': ' + errorMessage,
@@ -2812,7 +2363,6 @@ function($, Ajax, Str, Notification, ModalFactory, ModalEvents) {
                             });
                         });
 
-                        // When the modal is cancelled, re-enable the button
                         modal.getRoot().on(ModalEvents.cancel, function() {
                             button.prop('disabled', false);
                         });
@@ -2828,90 +2378,8 @@ function($, Ajax, Str, Notification, ModalFactory, ModalEvents) {
                 });
             });
 
-            // Handle model toggle (activate/deactivate)
-            $('.spp-toggle-model-status').on('click', function(e) {
-                e.preventDefault();
-
-                var button = $(this);
-                var modelId = button.data('model-id');
-                var isActive = button.data('is-active');
-
-                button.prop('disabled', true);
-
-                // Confirm action based on current state
-                var confirmKey = isActive ? 'confirmdeactivate' : 'confirmactivate';
-
-                Str.get_strings([
-                    {key: confirmKey, component: 'block_studentperformancepredictor'},
-                    {key: isActive ? 'deactivate' : 'activate', component: 'block_studentperformancepredictor'},
-                    {key: 'cancel', component: 'core'}
-                ]).done(function(strings) {
-                    ModalFactory.create({
-                        type: ModalFactory.types.SAVE_CANCEL,
-                        title: strings[0],
-                        body: strings[0]
-                    }).done(function(modal) {
-                        modal.setSaveButtonText(strings[1]);
-
-                        // When user confirms
-                        modal.getRoot().on(ModalEvents.save, function() {
-                            $.ajax({
-                                url: M.cfg.wwwroot + '/blocks/studentperformancepredictor/admin/ajax_toggle_model.php',
-                                type: 'POST',
-                                data: {
-                                    modelid: modelId,
-                                    courseid: courseId,
-                                    active: isActive ? 0 : 1,
-                                    sesskey: M.cfg.sesskey
-                                },
-                                dataType: 'json',
-                                success: function(response) {
-                                    if (response.success) {
-                                        window.location.reload();
-                                    } else {
-                                        button.prop('disabled', false);
-                                        Notification.addNotification({
-                                            message: response.message,
-                                            type: 'error'
-                                        });
-                                    }
-                                },
-                                error: function(xhr, status, error) {
-                                    button.prop('disabled', false);
-
-                                    var errorMessage = error;
-                                    try {
-                                        var response = JSON.parse(xhr.responseText);
-                                        if (response && response.message) {
-                                            errorMessage = response.message;
-                                        }
-                                    } catch (e) {
-                                        // Use default message
-                                    }
-
-                                    Str.get_string('actionerror', 'block_studentperformancepredictor').done(function(s) {
-                                        Notification.addNotification({
-                                            message: s + ': ' + errorMessage,
-                                            type: 'error'
-                                        });
-                                    });
-                                }
-                            });
-                        });
-
-                        // When cancelled
-                        modal.getRoot().on(ModalEvents.cancel, function() {
-                            button.prop('disabled', false);
-                        });
-
-                        modal.show();
-                    });
-                });
-            });
-
         } catch (e) {
             console.error('Error initializing admin interface:', e);
-            // Show a generic error notification
             Str.get_string('jserror', 'moodle').done(function(s) {
                 Notification.exception(new Error(s + ': ' + e.message));
             });
@@ -2925,367 +2393,12 @@ function($, Ajax, Str, Notification, ModalFactory, ModalEvents) {
 
 // blocks/studentperformancepredictor/amd/src/chart_renderer.js
 
-define(['jquery'], function($) {
-
-    /**
-     * Initialize the admin dashboard
-     */
-    var init = function() {
-        // Handle risk category card collapsing
-        $('.spp-risk-card .card-header').on('click', function() {
-            var $header = $(this);
-            var $card = $header.closest('.card');
-            var $collapseSection = $card.find('.collapse');
-            var $indicator = $header.find('.collapse-indicator i');
-
-            // Toggle the collapse section directly
-            $collapseSection.collapse('toggle');
-
-            // Update the collapse indicator icon on shown/hidden events
-            $collapseSection.on('shown.bs.collapse', function() {
-                $indicator.removeClass('fa-chevron-down').addClass('fa-chevron-up');
-            });
-
-            $collapseSection.on('hidden.bs.collapse', function() {
-                $indicator.removeClass('fa-chevron-up').addClass('fa-chevron-down');
-            });
-        });
-    };
-
-    return {
-        init: init
-    };
-});
-define(['jquery', 'core/ajax', 'core/str', 'core/notification', 'core/modal_factory', 'core/modal_events'], 
-function($, Ajax, Str, Notification, ModalFactory, ModalEvents) {
-
-    /**
-     * Initialize admin interface.
-     * 
-     * @param {int} courseId Course ID
-     */
-    var init = function(courseId) {
-        try {
-            // Handle dataset upload form
-            $('#spp-dataset-upload-form').on('submit', function(e) {
-                e.preventDefault();
-
-                // Validate form
-                var form = $(this)[0];
-                if (!form.checkValidity()) {
-                    if (typeof form.reportValidity === 'function') {
-                        form.reportValidity();
-                    }
-                    return;
-                }
-
-                var formData = new FormData(form);
-                var submitButton = $(this).find('input[type="submit"]');
-                var originalText = submitButton.val();
-                submitButton.prop('disabled', true);
-
-                // Load 'uploading' string asynchronously for button and status
-                Str.get_string('uploading', 'moodle').done(function(uploadingStr) {
-                    submitButton.val(uploadingStr);
-                    $('#spp-upload-status').html(
-                        '<div class="spp-loading"><i class="fa fa-spinner fa-spin"></i>' + uploadingStr + '</div>'
-                    );
-                }).fail(function() {
-                    submitButton.val('Uploading...');
-                    $('#spp-upload-status').html(
-                        '<div class="spp-loading"><i class="fa fa-spinner fa-spin"></i>Uploading...</div>'
-                    );
-                });
-
-                $.ajax({
-                    url: M.cfg.wwwroot + '/blocks/studentperformancepredictor/admin/upload_dataset.php',
-                    type: 'POST',
-                    data: formData,
-                    contentType: false,
-                    processData: false,
-                    success: function(response) {
-                        submitButton.prop('disabled', false);
-                        submitButton.val(originalText);
-                        $('#spp-upload-status').empty();
-
-                        try {
-                            // Properly handle response which might be string or object
-                            var responseData;
-                            if (typeof response === 'string') {
-                                try {
-                                    responseData = JSON.parse(response);
-                                } catch (e) {
-                                    console.error('Invalid JSON response', response);
-                                    Notification.exception(new Error('Invalid server response'));
-                                    return;
-                                }
-                            } else {
-                                responseData = response;
-                            }
-
-                            if (responseData && responseData.success) {
-                                // Show success message
-                                var msg = responseData.message;
-                                if (!msg) {
-                                    Str.get_string('datasetsaved', 'block_studentperformancepredictor').done(function(s) {
-                                        Notification.addNotification({ message: s, type: 'success' });
-                                    });
-                                } else {
-                                    Notification.addNotification({ message: msg, type: 'success' });
-                                }
-                                setTimeout(function() { window.location.reload(); }, 1500);
-                            } else {
-                                var msg = responseData ? responseData.message : '';
-                                if (!msg) {
-                                    Str.get_string('datasetsaveerror', 'block_studentperformancepredictor').done(function(s) {
-                                        Notification.addNotification({ message: s, type: 'error' });
-                                    });
-                                } else {
-                                    Notification.addNotification({ message: msg, type: 'error' });
-                                }
-                            }
-                        } catch (e) {
-                            console.error('Error handling response:', e);
-                            Str.get_string('datasetsaveerror', 'block_studentperformancepredictor').done(function(s) {
-                                Notification.addNotification({ message: s, type: 'error' });
-                            });
-                        }
-                    },
-                    error: function(xhr, status, error) {
-                        console.error('AJAX error:', status, error);
-                        submitButton.prop('disabled', false);
-                        submitButton.val(originalText);
-                        $('#spp-upload-status').empty();
-
-                        // Get response error message if available
-                        var errorMessage = error;
-                        try {
-                            var response = JSON.parse(xhr.responseText);
-                            if (response && response.message) {
-                                errorMessage = response.message;
-                            }
-                        } catch (e) {
-                            // Use default error message if JSON parsing fails
-                        }
-
-                        Str.get_string('uploaderror', 'block_studentperformancepredictor').done(function(s) {
-                            Notification.addNotification({ message: s + ': ' + errorMessage, type: 'error' });
-                        });
-                    }
-                });
-            });
-
-            // Handle model training form
-            $('#spp-train-model-form').on('submit', function(e) {
-                e.preventDefault();
-                var datasetId = $('#datasetid').val();
-                var algorithm = $('#algorithm').val();
-                if (!datasetId) {
-                    Str.get_string('selectdataset', 'block_studentperformancepredictor').done(function(s) {
-                        Notification.addNotification({ message: s, type: 'error' });
-                    });
-                    return;
-                }
-                var submitButton = $(this).find('input[type="submit"]');
-                var originalText = submitButton.val();
-                submitButton.prop('disabled', true);
-                Str.get_string('training', 'block_studentperformancepredictor').done(function(trainingStr) {
-                    submitButton.val(trainingStr);
-                });
-
-                // Using traditional form submission for better file handling compatibility
-                var form = $(this)[0];
-                form.submit();
-            });
-
-            // Handle dataset deletion
-            $('.spp-delete-dataset').on('click', function(e) {
-                e.preventDefault();
-
-                var button = $(this);
-                var datasetId = button.data('dataset-id');
-
-                button.prop('disabled', true);
-
-                // Confirm deletion.
-                Str.get_strings([
-                    {key: 'confirmdeletedataset', component: 'block_studentperformancepredictor'},
-                    {key: 'delete', component: 'core'},
-                    {key: 'cancel', component: 'core'}
-                ]).done(function(strings) {
-                    ModalFactory.create({
-                        type: ModalFactory.types.SAVE_CANCEL,
-                        title: strings[0],
-                        body: strings[0]
-                    }).done(function(modal) {
-                        modal.setSaveButtonText(strings[1]);
-
-                        // When the user confirms deletion
-                        modal.getRoot().on(ModalEvents.save, function() {
-                            $.ajax({
-                                url: M.cfg.wwwroot + '/blocks/studentperformancepredictor/admin/ajax_delete_dataset.php',
-                                type: 'POST',
-                                data: {
-                                    datasetid: datasetId,
-                                    courseid: courseId,
-                                    sesskey: M.cfg.sesskey
-                                },
-                                dataType: 'json',
-                                success: function(response) {
-                                    if (response.success) {
-                                        // Reload page to update dataset list.
-                                        window.location.reload();
-                                    } else {
-                                        button.prop('disabled', false);
-
-                                        // Show error message.
-                                        Notification.addNotification({
-                                            message: response.message,
-                                            type: 'error'
-                                        });
-                                    }
-                                },
-                                error: function(xhr, status, error) {
-                                    button.prop('disabled', false);
-
-                                    // Try to parse error message from response
-                                    var errorMessage = error;
-                                    try {
-                                        var response = JSON.parse(xhr.responseText);
-                                        if (response && response.message) {
-                                            errorMessage = response.message;
-                                        }
-                                    } catch (e) {
-                                        // Use default error message
-                                    }
-
-                                    // Show error message.
-                                    Str.get_string('actionerror', 'block_studentperformancepredictor').done(function(s) {
-                                        Notification.addNotification({
-                                            message: s + ': ' + errorMessage,
-                                            type: 'error'
-                                        });
-                                    });
-                                }
-                            });
-                        });
-
-                        // When the modal is cancelled, re-enable the button
-                        modal.getRoot().on(ModalEvents.cancel, function() {
-                            button.prop('disabled', false);
-                        });
-
-                        modal.show();
-                    }).catch(function(error) {
-                        console.error('Error creating modal:', error);
-                        button.prop('disabled', false);
-                    });
-                }).catch(function(error) {
-                    console.error('Error loading strings:', error);
-                    button.prop('disabled', false);
-                });
-            });
-
-            // Handle model toggle (activate/deactivate)
-            $('.spp-toggle-model-status').on('click', function(e) {
-                e.preventDefault();
-
-                var button = $(this);
-                var modelId = button.data('model-id');
-                var isActive = button.data('is-active');
-
-                button.prop('disabled', true);
-
-                // Confirm action based on current state
-                var confirmKey = isActive ? 'confirmdeactivate' : 'confirmactivate';
-
-                Str.get_strings([
-                    {key: confirmKey, component: 'block_studentperformancepredictor'},
-                    {key: isActive ? 'deactivate' : 'activate', component: 'block_studentperformancepredictor'},
-                    {key: 'cancel', component: 'core'}
-                ]).done(function(strings) {
-                    ModalFactory.create({
-                        type: ModalFactory.types.SAVE_CANCEL,
-                        title: strings[0],
-                        body: strings[0]
-                    }).done(function(modal) {
-                        modal.setSaveButtonText(strings[1]);
-
-                        // When user confirms
-                        modal.getRoot().on(ModalEvents.save, function() {
-                            $.ajax({
-                                url: M.cfg.wwwroot + '/blocks/studentperformancepredictor/admin/ajax_toggle_model.php',
-                                type: 'POST',
-                                data: {
-                                    modelid: modelId,
-                                    courseid: courseId,
-                                    active: isActive ? 0 : 1,
-                                    sesskey: M.cfg.sesskey
-                                },
-                                dataType: 'json',
-                                success: function(response) {
-                                    if (response.success) {
-                                        window.location.reload();
-                                    } else {
-                                        button.prop('disabled', false);
-                                        Notification.addNotification({
-                                            message: response.message,
-                                            type: 'error'
-                                        });
-                                    }
-                                },
-                                error: function(xhr, status, error) {
-                                    button.prop('disabled', false);
-
-                                    var errorMessage = error;
-                                    try {
-                                        var response = JSON.parse(xhr.responseText);
-                                        if (response && response.message) {
-                                            errorMessage = response.message;
-                                        }
-                                    } catch (e) {
-                                        // Use default message
-                                    }
-
-                                    Str.get_string('actionerror', 'block_studentperformancepredictor').done(function(s) {
-                                        Notification.addNotification({
-                                            message: s + ': ' + errorMessage,
-                                            type: 'error'
-                                        });
-                                    });
-                                }
-                            });
-                        });
-
-                        // When cancelled
-                        modal.getRoot().on(ModalEvents.cancel, function() {
-                            button.prop('disabled', false);
-                        });
-
-                        modal.show();
-                    });
-                });
-            });
-
-        } catch (e) {
-            console.error('Error initializing admin interface:', e);
-            // Show a generic error notification
-            Str.get_string('jserror', 'moodle').done(function(s) {
-                Notification.exception(new Error(s + ': ' + e.message));
-            });
-        }
-    };
-
-    return {
-        init: init
-    };
-});
 define(['jquery', 'core/chartjs', 'core/str'], function($, Chart, Str) {
 
     /**
      * Initialize student prediction chart.
      */
-    var init = function() {
+    var initStudentChart = function() {
         var chartElement = document.getElementById('spp-prediction-chart');
         if (!chartElement) {
             return;
@@ -3572,7 +2685,7 @@ define(['jquery', 'core/chartjs', 'core/str'], function($, Chart, Str) {
     };
 
     return {
-        init: init,
+        init: initStudentChart,
         initTeacherChart: initTeacherChart,
         initAdminChart: initAdminChart
     };
@@ -3580,60 +2693,38 @@ define(['jquery', 'core/chartjs', 'core/str'], function($, Chart, Str) {
 
 // blocks/studentperformancepredictor/amd/src/prediction_viewer.js
 
-define(['jquery', 'core/ajax', 'core/notification', 'core/modal_factory', 'core/modal_events', 'core/str'], 
+define(['jquery', 'core/ajax', 'core/notification', 'core/modal_factory', 'core/modal_events', 'core/str'],
 function($, Ajax, Notification, ModalFactory, ModalEvents, Str) {
     /**
      * Initialize suggestion management and prediction features.
      */
     var init = function() {
+        // This function will initialize all event listeners when the page loads.
+
         // Handle marking suggestions as viewed
         $(document).on('click', '.spp-mark-viewed', function(e) {
             e.preventDefault();
             var button = $(this);
             var suggestionId = button.data('id');
-
             if (!suggestionId) {
-                console.error('No suggestion ID found');
                 return;
             }
-
-            // Disable button to prevent multiple clicks
             button.prop('disabled', true);
-            button.addClass('disabled');
-
-            try {
-                var promise = Ajax.call([{
-                    methodname: 'block_studentperformancepredictor_mark_suggestion_viewed',
-                    args: { suggestionid: suggestionId }
-                }]);
-
-                promise[0].done(function(response) {
+            Ajax.call([{
+                methodname: 'block_studentperformancepredictor_mark_suggestion_viewed',
+                args: { suggestionid: suggestionId },
+                done: function(response) {
                     if (response.status) {
-                        Str.get_string('viewed', 'block_studentperformancepredictor').done(function(viewedStr) {
-                            button.replaceWith('<span class="badge bg-secondary">' + viewedStr + '</span>');
-                        }).fail(function() {
-                            button.replaceWith('<span class="badge bg-secondary">Viewed</span>');
+                        Str.get_string('viewed', 'block_studentperformancepredictor').done(function(s) {
+                            button.replaceWith('<span class="badge bg-secondary">' + s + '</span>');
                         });
                     } else {
+                        Notification.addNotification({ message: response.message, type: 'error' });
                         button.prop('disabled', false);
-                        button.removeClass('disabled');
-                        Notification.addNotification({ 
-                            message: response.message || 'Unknown error', 
-                            type: 'error' 
-                        });
                     }
-                }).fail(function(error) {
-                    button.prop('disabled', false);
-                    button.removeClass('disabled');
-                    console.error('AJAX call failed:', error);
-                    Notification.exception(error);
-                });
-            } catch (err) {
-                console.error('Error calling AJAX:', err);
-                button.prop('disabled', false);
-                button.removeClass('disabled');
-                Notification.exception(new Error('Failed to mark suggestion as viewed'));
-            }
+                },
+                fail: Notification.exception
+            }]);
         });
 
         // Handle marking suggestions as completed
@@ -3641,92 +2732,44 @@ function($, Ajax, Notification, ModalFactory, ModalEvents, Str) {
             e.preventDefault();
             var button = $(this);
             var suggestionId = button.data('id');
-
             if (!suggestionId) {
-                console.error('No suggestion ID found');
                 return;
             }
-
-            // Disable button to prevent multiple clicks
             button.prop('disabled', true);
-            button.addClass('disabled');
-
-            try {
-                var promise = Ajax.call([{
-                    methodname: 'block_studentperformancepredictor_mark_suggestion_completed',
-                    args: { suggestionid: suggestionId }
-                }]);
-
-                promise[0].done(function(response) {
+            Ajax.call([{
+                methodname: 'block_studentperformancepredictor_mark_suggestion_completed',
+                args: { suggestionid: suggestionId },
+                done: function(response) {
                     if (response.status) {
-                        Str.get_strings([
-                            {key: 'completed', component: 'block_studentperformancepredictor'},
-                            {key: 'viewed', component: 'block_studentperformancepredictor'}
-                        ]).done(function(strings) {
-                            button.replaceWith('<span class="badge bg-success">' + strings[0] + '</span>');
-                            var viewedBtn = button.closest('.spp-suggestion-actions').find('.spp-mark-viewed');
-                            if (viewedBtn.length) {
-                                viewedBtn.replaceWith('<span class="badge bg-secondary">' + strings[1] + '</span>');
-                            }
-                        }).fail(function() {
-                            button.replaceWith('<span class="badge bg-success">Completed</span>');
-                            var viewedBtn = button.closest('.spp-suggestion-actions').find('.spp-mark-viewed');
-                            if (viewedBtn.length) {
-                                viewedBtn.replaceWith('<span class="badge bg-secondary">Viewed</span>');
-                            }
+                        Str.get_string('completed', 'block_studentperformancepredictor').done(function(s) {
+                            button.replaceWith('<span class="badge bg-success">' + s + '</span>');
                         });
                     } else {
+                        Notification.addNotification({ message: response.message, type: 'error' });
                         button.prop('disabled', false);
-                        button.removeClass('disabled');
-                        Notification.addNotification({ 
-                            message: response.message || 'Unknown error', 
-                            type: 'error' 
-                        });
                     }
-                }).fail(function(error) {
-                    button.prop('disabled', false);
-                    button.removeClass('disabled');
-                    console.error('AJAX call failed:', error);
-                    Notification.exception(error);
-                });
-            } catch (err) {
-                console.error('Error calling AJAX:', err);
-                button.prop('disabled', false);
-                button.removeClass('disabled');
-                Notification.exception(new Error('Failed to mark suggestion as completed'));
-            }
+                },
+                fail: Notification.exception
+            }]);
         });
 
         // Handle teacher refresh predictions button
-        $('.spp-refresh-predictions').on('click', function(e) {
+        $(document).on('click', '.spp-refresh-predictions', function(e) {
             e.preventDefault();
             var button = $(this);
-
-            // Disable button to prevent multiple clicks
-            button.prop('disabled', true);
-            button.addClass('disabled');
-
             var courseId = button.data('course-id');
-            if (!courseId) {
-                courseId = $('.block_studentperformancepredictor').data('course-id');
-            }
 
             if (!courseId) {
-                button.prop('disabled', false);
-                button.removeClass('disabled');
-                Str.get_string('error:nocourseid', 'block_studentperformancepredictor').done(function(msg) {
-                    Notification.addNotification({ message: msg, type: 'error' });
-                }).fail(function() {
-                    Notification.addNotification({ message: 'No course ID', type: 'error' });
-                });
+                Notification.addNotification({ message: 'Course ID not found.', type: 'error' });
                 return;
             }
+
+            button.prop('disabled', true);
 
             Str.get_strings([
                 {key: 'refreshconfirmation', component: 'block_studentperformancepredictor'},
                 {key: 'refresh', component: 'block_studentperformancepredictor'},
-                {key: 'cancel', component: 'moodle'},
-                {key: 'refreshing', component: 'block_studentperformancepredictor'}
+                {key: 'cancel', component: 'core'}
             ]).done(function(strings) {
                 ModalFactory.create({
                     type: ModalFactory.types.SAVE_CANCEL,
@@ -3734,159 +2777,69 @@ function($, Ajax, Notification, ModalFactory, ModalEvents, Str) {
                     body: strings[0]
                 }).done(function(modal) {
                     modal.setSaveButtonText(strings[1]);
-
                     modal.getRoot().on(ModalEvents.save, function() {
-                        var loadingMessage = $('<div class="spp-loading"><i class="fa fa-spinner fa-spin"></i> ' + strings[3] + '</div>');
-                        button.after(loadingMessage);
-
-                        try {
-                            var promise = Ajax.call([{
-                                methodname: 'block_studentperformancepredictor_refresh_predictions',
-                                args: { courseid: courseId }
-                            }]);
-
-                            promise[0].done(function(response) {
-                                button.prop('disabled', false);
-                                button.removeClass('disabled');
-                                loadingMessage.remove();
-
+                        Ajax.call([{
+                            methodname: 'block_studentperformancepredictor_refresh_predictions',
+                            args: { courseid: courseId },
+                            done: function(response) {
                                 if (response.status) {
                                     Notification.addNotification({ message: response.message, type: 'success' });
-                                    setTimeout(function() { window.location.reload(); }, 1500);
+                                    setTimeout(function() {
+                                        window.location.reload();
+                                    }, 1500);
                                 } else {
                                     Notification.addNotification({ message: response.message, type: 'error' });
+                                    button.prop('disabled', false);
                                 }
-                            }).fail(function(error) {
+                            },
+                            fail: function(ex) {
+                                Notification.exception(ex);
                                 button.prop('disabled', false);
-                                button.removeClass('disabled');
-                                loadingMessage.remove();
-                                console.error('AJAX call failed:', error);
-                                Notification.exception(error);
-                            });
-                        } catch (err) {
-                            button.prop('disabled', false);
-                            button.removeClass('disabled');
-                            loadingMessage.remove();
-                            console.error('Error calling AJAX:', err);
-                            Notification.exception(new Error('Failed to refresh predictions'));
-                        }
+                            }
+                        }]);
                     });
-
                     modal.getRoot().on(ModalEvents.cancel, function() {
                         button.prop('disabled', false);
-                        button.removeClass('disabled');
                     });
-
                     modal.show();
-                }).catch(function(err) {
-                    console.error('Error creating modal:', err);
-                    button.prop('disabled', false);
-                    button.removeClass('disabled');
-                    Notification.exception(err);
                 });
-            }).catch(function(err) {
-                console.error('Error loading strings:', err);
-                button.prop('disabled', false);
-                button.removeClass('disabled');
-                Notification.exception(err);
-            });
+            }).fail(Notification.exception);
         });
 
-        // Handle student generate prediction button with AJAX
-        $('.spp-generate-prediction, .spp-update-prediction').on('click', function(e) {
+        // Handle student generate prediction and teacher/admin update prediction buttons
+        $(document).on('click', '.spp-generate-prediction, .spp-update-prediction', function(e) {
             e.preventDefault();
             var button = $(this);
-            var url = button.attr('href');
+            var courseId = button.data('course-id');
+            var userId = button.data('user-id');
+            var originalText = button.html();
+            
+            button.prop('disabled', true).html('<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> ' + originalText);
 
-            // Disable button and show loading
-            button.prop('disabled', true);
-            button.closest('div').find('.spp-prediction-loading').show();
-
-            // Extract course and user IDs
-            var blockElement = $('.block_studentperformancepredictor');
-            var courseId = button.data('course-id') || blockElement.data('course-id');
-            var userId = button.data('user-id') || blockElement.data('user-id');
-
-            // Add parameters to URL
-            if (url.indexOf('?') !== -1) {
-                url += '&redirect=0';
-            } else {
-                url += '?redirect=0';
-            }
-
-            // Add userid and courseid if not already in the URL
-            if (url.indexOf('userid=') === -1 && userId) {
-                url += '&userid=' + userId;
-            }
-
-            if (url.indexOf('courseid=') === -1 && courseId) {
-                url += '&courseid=' + courseId;
-            }
-
-            // Add sesskey
-            url += '&sesskey=' + M.cfg.sesskey;
-
-            // Call the endpoint
-            $.ajax({
-                url: url,
-                method: 'GET',
-                dataType: 'json',
-                success: function(response) {
+            // Using Moodle's core/ajax web service for the request.
+            Ajax.call([{
+                methodname: 'block_studentperformancepredictor_generate_student_prediction',
+                args: {
+                    courseid: courseId,
+                    userid: userId
+                },
+                done: function(response) {
                     if (response.success) {
-                        // Show success message
-                        Str.get_string('predictiongenerated', 'block_studentperformancepredictor').done(function(msg) {
-                            Notification.addNotification({ message: msg, type: 'success' });
-                        });
-
-                        // Check if this is a student row in a table (for teacher's dashboard)
-                        var studentRow = button.closest('tr');
-                        if (studentRow.length) {
-                            // Highlight the row to indicate update
-                            studentRow.addClass('table-success');
-                            setTimeout(function() {
-                                studentRow.removeClass('table-success');
-                            }, 3000);
-
-                            // Update pass probability in the row
-                            if (response.passprob) {
-                                var probCell = studentRow.find('td:eq(1)');
-                                if (probCell.length) {
-                                    probCell.html('<span class="badge badge-' + 
-                                                (response.riskvalue == 3 ? 'danger' : 
-                                                response.riskvalue == 2 ? 'warning' : 'success') + 
-                                                '">' + response.passprob + '%</span>');
-                                }
-                            }
-
-                            // Don't reload the page for individual student updates
-                        } else {
-                            // Reload the page to show new prediction for student view
-                            setTimeout(function() {
-                                window.location.reload();
-                            }, 1000);
-                        }
+                        Notification.addNotification({ message: response.message, type: 'success' });
+                        // Reload the page to show the new prediction data.
+                        setTimeout(function() {
+                            window.location.reload();
+                        }, 1000);
                     } else {
-                        // Show error
-                        button.prop('disabled', false);
-                        button.closest('div').find('.spp-prediction-loading').hide();
-
-                        Notification.addNotification({ 
-                            message: response.error || 'Unknown error', 
-                            type: 'error' 
-                        });
+                        Notification.addNotification({ message: response.message, type: 'error' });
+                        button.prop('disabled', false).html(originalText);
                     }
                 },
-                error: function(xhr, status, error) {
-                    // Handle error
-                    button.prop('disabled', false);
-                    button.closest('div').find('.spp-prediction-loading').hide();
-                    console.error('AJAX error:', xhr, status, error);
-
-                    Str.get_string('predictionerror', 'block_studentperformancepredictor').done(function(msg) {
-                        Notification.addNotification({ message: msg, type: 'error' });
-                    });
+                fail: function(ex) {
+                    Notification.exception(ex);
+                    button.prop('disabled', false).html(originalText);
                 }
-            });
+            }]);
         });
     };
 
@@ -3895,31 +2848,65 @@ function($, Ajax, Notification, ModalFactory, ModalEvents, Str) {
     };
 });
 
-// blocks/studentperformancepredictor/amd/src/teacher_dashboard.js
+// blocks/studentperformancepredictor/amd/src/refresh_button.js
 
-define(['jquery'], function($) {
-
-    /**
-     * Initialize the teacher dashboard
-     */
+define(['jquery', 'core/ajax', 'core/notification', 'core/modal_factory', 'core/modal_events', 'core/str'],
+function($, Ajax, Notification, ModalFactory, ModalEvents, Str) {
     var init = function() {
-        // Handle risk category card collapsing
-        $('.spp-risk-card .card-header').on('click', function() {
-            var $header = $(this);
-            var $card = $header.closest('.card');
-            var $collapseSection = $card.find('.collapse');
-            var $indicator = $header.find('.collapse-indicator i');
+        $(document).on('click', '.spp-refresh-predictions', function(e) {
+            e.preventDefault();
+            var button = $(this);
+            var courseId = button.data('course-id');
 
-            // Toggle the collapse section directly
-            $collapseSection.collapse('toggle');
+            if (!courseId) {
+                Notification.addNotification({ message: 'Course ID not found.', type: 'error' });
+                return;
+            }
 
-            // Update the collapse indicator icon on shown/hidden events
-            $collapseSection.on('shown.bs.collapse', function() {
-                $indicator.removeClass('fa-chevron-down').addClass('fa-chevron-up');
-            });
+            var originalButtonText = button.text();
+            button.prop('disabled', true).text('Processing...');
 
-            $collapseSection.on('hidden.bs.collapse', function() {
-                $indicator.removeClass('fa-chevron-up').addClass('fa-chevron-down');
+            Str.get_strings([
+                {key: 'refreshconfirmation', component: 'block_studentperformancepredictor'},
+                {key: 'refresh', component: 'block_studentperformancepredictor'},
+                {key: 'cancel', component: 'core'}
+            ]).done(function(strings) {
+                ModalFactory.create({
+                    type: ModalFactory.types.SAVE_CANCEL,
+                    title: strings[0],
+                    body: strings[0]
+                }).done(function(modal) {
+                    modal.setSaveButtonText(strings[1]);
+                    modal.getRoot().on(ModalEvents.save, function() {
+                        Ajax.call([{
+                            methodname: 'block_studentperformancepredictor_refresh_predictions',
+                            args: { courseid: courseId },
+                            done: function(response) {
+                                if (response.status) {
+                                    Notification.addNotification({ message: response.message, type: 'success' });
+                                    // Reload the page after a short delay to see updates
+                                    setTimeout(function() {
+                                        window.location.reload();
+                                    }, 1500);
+                                } else {
+                                    Notification.addNotification({ message: response.message, type: 'error' });
+                                    button.prop('disabled', false).text(originalButtonText);
+                                }
+                            },
+                            fail: function(ex) {
+                                Notification.exception(ex);
+                                button.prop('disabled', false).text(originalButtonText);
+                            }
+                        }]);
+                    });
+                    modal.getRoot().on(ModalEvents.cancel, function() {
+                        button.prop('disabled', false).text(originalButtonText);
+                    });
+                    modal.show();
+                });
+            }).fail(function(ex) {
+                Notification.exception(ex);
+                button.prop('disabled', false).text(originalButtonText);
             });
         });
     };
@@ -4536,53 +3523,41 @@ class predictor {
         $data['grade_count'] = $gradecount;
 
         // Remaining comprehensive data points
-        // (These might be used by suggestion_generator or for other comprehensive reporting,
-        // but the core features for ML prediction are the 'activity_level', 'submission_count', etc.)
-
-        // Get log counts for course modules accessed - safer query
         $sql = "SELECT COUNT(DISTINCT cmid) FROM {logstore_standard_log}
                 WHERE userid = ? AND action = ? AND target = ?";
         $data['total_course_modules_accessed'] = $DB->count_records_sql($sql, [$userid, 'viewed', 'course_module']);
 
-        // Get log counts for current course - safer query
         $sql = "SELECT COUNT(DISTINCT cmid) FROM {logstore_standard_log}
                 WHERE userid = ? AND courseid = ? AND action = ? AND target = ?";
         $data['current_course_modules_accessed'] = $DB->count_records_sql($sql, [$userid, $this->courseid, 'viewed', 'course_module']);
 
-        // Forum posts counts - fixed query
         $sql = "SELECT COUNT(*) FROM {forum_posts} fp
                 JOIN {forum_discussions} fd ON fp.discussion = fd.id
                 WHERE fp.userid = ?";
         $data['total_forum_posts'] = $DB->count_records_sql($sql, [$userid]);
 
-        // Forum posts in current course - fixed query
         $sql = "SELECT COUNT(*) FROM {forum_posts} fp
                 JOIN {forum_discussions} fd ON fp.discussion = fd.id
                 JOIN {forum} f ON fd.forum = f.id
                 WHERE fp.userid = ? AND f.course = ?";
         $data['current_course_forum_posts'] = $DB->count_records_sql($sql, [$userid, $this->courseid]);
 
-        // Assignment submissions
         $params_assign = ['userid' => $userid, 'status' => 'submitted'];
         $data['total_assignment_submissions'] = $DB->count_records('assign_submission', $params_assign);
 
-        // Assignment submissions in current course
         $sql_current_assign_submissions = "SELECT COUNT(*) FROM {assign_submission} sub
                                            JOIN {assign} a ON sub.assignment = a.id
                                            WHERE sub.userid = :userid AND a.course = :courseid AND sub.status = :status";
         $data['current_course_assignment_submissions'] = $DB->count_records_sql($sql_current_assign_submissions, ['userid' => $userid, 'courseid' => $this->courseid, 'status' => 'submitted']);
 
-        // Quiz attempts
         $params_quiz = ['userid' => $userid, 'state' => 'finished'];
         $data['total_quiz_attempts'] = $DB->count_records('quiz_attempts', $params_quiz);
 
-        // Quiz attempts in current course
         $sql_current_quiz_attempts = "SELECT COUNT(*) FROM {quiz_attempts} qa
                                       JOIN {quiz} q ON qa.quiz = q.id
                                       WHERE qa.userid = :userid AND q.course = :courseid AND qa.state = :state";
         $data['current_course_quiz_attempts'] = $DB->count_records_sql($sql_current_quiz_attempts, ['userid' => $userid, 'courseid' => $this->courseid, 'state' => 'finished']);
 
-        // Current course grade
         try {
             $grade = grade_get_course_grade($userid, $this->courseid);
             if ($grade && $grade->grade !== null) {
@@ -4601,114 +3576,60 @@ class predictor {
             $data['current_course_grade_percentage'] = 0;
         }
 
-        // Calculate overall engagement score
         $data['engagement_score'] = $this->calculate_engagement_score($data);
-
-        // Calculate historical performance
         $data['historical_performance'] = $this->calculate_historical_performance($userid);
 
         return $data;
     }
 
-    /**
-     * Calculate overall engagement score (0-1).
-     *
-     * @param array $data Student data
-     * @return float Engagement score
-     */
     protected function calculate_engagement_score($data) {
         $score = 0;
         $factors = 0;
-
-        // Module access factor
         if (isset($data['current_course_modules_accessed']) && $data['current_course_modules_accessed'] > 0) {
-            $score += min(1, $data['current_course_modules_accessed'] / 10); // Scale up to 10 modules
+            $score += min(1, $data['current_course_modules_accessed'] / 10);
             $factors++;
         }
-
-        // Forum participation factor
         if (isset($data['current_course_forum_posts']) && $data['current_course_forum_posts'] > 0) {
-            $score += min(1, $data['current_course_forum_posts'] / 5); // Scale up to 5 posts
+            $score += min(1, $data['current_course_forum_posts'] / 5);
             $factors++;
         }
-
-        // Assignment submission factor
         if (isset($data['current_course_assignment_submissions']) && $data['current_course_assignment_submissions'] > 0) {
-            $score += min(1, $data['current_course_assignment_submissions'] / 3); // Scale up to 3 submissions
+            $score += min(1, $data['current_course_assignment_submissions'] / 3);
             $factors++;
         }
-
-        // Quiz attempt factor
         if (isset($data['current_course_quiz_attempts']) && $data['current_course_quiz_attempts'] > 0) {
-            $score += min(1, $data['current_course_quiz_attempts'] / 3); // Scale up to 3 attempts
+            $score += min(1, $data['current_course_quiz_attempts'] / 3);
             $factors++;
         }
-
-        // Last access factor (more recent = higher score)
-        if (isset($data['days_since_last_access']) && $data['days_since_last_access'] < 30) { // Within last month
+        if (isset($data['days_since_last_access']) && $data['days_since_last_access'] < 30) {
             $score += max(0, 1 - ($data['days_since_last_access'] / 30));
             $factors++;
         }
-
-        // Return average score, default to 0.5 if no factors available
         return $factors > 0 ? $score / $factors : 0.5;
     }
 
-    /**
-     * Calculate historical performance score (0-1).
-     *
-     * @param int $userid User ID
-     * @return float Historical performance score
-     */
     protected function calculate_historical_performance($userid) {
         global $DB;
-
-        // Get average course grade percentage for completed courses
         $sql = "SELECT AVG(gg.finalgrade/gi.grademax) as avggrade
                 FROM {grade_grades} gg
                 JOIN {grade_items} gi ON gg.itemid = gi.id
                 WHERE gg.userid = ? AND gi.itemtype = ? AND gg.finalgrade IS NOT NULL";
-
         $result = $DB->get_record_sql($sql, [$userid, 'course']);
-
-        if ($result && $result->avggrade !== null) {
-            return (float)$result->avggrade;
-        }
-
-        return 0.5; // Default to neutral if no history
+        return ($result && $result->avggrade !== null) ? (float)$result->avggrade : 0.5;
     }
 
-    /**
-     * Create feature vector from student data for prediction.
-     *
-     * @param array $studentdata Student data
-     * @return array Feature vector
-     */
     protected function create_feature_vector($studentdata) {
-        // Return the data as an associative array for the API
         return $studentdata;
     }
 
-    /**
-     * Make prediction using the model (backend-driven orchestration).
-     *
-     * This method calls the Python backend /predict endpoint and uses the returned prediction/probabilities.
-     * No ML logic is performed in PHP.
-     *
-     * @param array $features Feature vector
-     * @return object Prediction result
-     */
     protected function make_prediction($features) {
         global $CFG;
         $result = new \stdClass();
         $result->details = array();
-
-        // Call Python backend for prediction
         $apiurl = get_config('block_studentperformancepredictor', 'python_api_url');
         if (empty($apiurl)) {
             $apiurl = 'http://localhost:5000/predict';
         } else {
-            // Ensure API URL ends with the predict endpoint
             if (substr($apiurl, -8) !== '/predict') {
                 $apiurl = rtrim($apiurl, '/') . '/predict';
             }
@@ -4718,57 +3639,37 @@ class predictor {
             $apikey = 'changeme';
         }
 
-        // Initialize curl
         $curl = new \curl();
-        $payload = [
-            'model_id' => $this->model->modelid,
-            'features' => $features
-        ];
+        $payload = ['model_id' => $this->model->modelid, 'features' => $features];
         $options = [
             'CURLOPT_TIMEOUT' => 60,
             'CURLOPT_RETURNTRANSFER' => true,
-            'CURLOPT_HTTPHEADER' => [
-                'Content-Type: application/json',
-                'X-API-Key: ' . $apikey
-            ],
-            // Add these for Windows/XAMPP compatibility
+            'CURLOPT_HTTPHEADER' => ['Content-Type: application/json', 'X-API-Key: ' . $apikey],
             'CURLOPT_SSL_VERIFYHOST' => 0,
             'CURLOPT_SSL_VERIFYPEER' => 0
         ];
-
-        // Log the request for debugging
         $debug = get_config('block_studentperformancepredictor', 'enabledebug');
         if ($debug) {
             debugging('Prediction request to ' . $apiurl . ': ' . json_encode($payload), DEBUG_DEVELOPER);
         }
-
         try {
             $response = $curl->post($apiurl, json_encode($payload), $options);
             $httpcode = $curl->get_info()['http_code'] ?? 0;
-
             if ($debug) {
                 debugging('Prediction response code: ' . $httpcode, DEBUG_DEVELOPER);
             }
-
             if ($httpcode === 200) {
                 $data = json_decode($response, true);
                 if (is_array($data) && isset($data['prediction'])) {
-                    // Get the pass probability from response
                     if (isset($data['probability'])) {
                         $result->passprob = $data['probability'];
                     } else if (isset($data['probabilities']) && is_array($data['probabilities']) && count($data['probabilities']) >= 2) {
-                        // Use the probability for class 1 (passing)
                         $result->passprob = $data['probabilities'][1];
-                    } else if (isset($data['probabilities']) && is_array($data['probabilities'])) {
-                        // Use the highest probability if class is unclear
-                        $result->passprob = max($data['probabilities']);
-                    } else if ($data['prediction'] == 1) {
-                        // If only binary prediction available
-                        $result->passprob = 0.75; // Default high probability for positive prediction
                     } else {
-                        $result->passprob = 0.25; // Default low probability for negative prediction
+                        $result->passprob = ($data['prediction'] == 1) ? 0.75 : 0.25;
                     }
-                    $result->details['backend'] = $data;
+                    // This is the crucial change: store the entire response.
+                    $result->details = $data;
                 } else {
                     if ($debug) {
                         debugging('Invalid prediction response format: ' . $response, DEBUG_DEVELOPER);
@@ -4790,68 +3691,44 @@ class predictor {
             $result->passprob = 0.5;
             $result->details['backend_error'] = 'Exception: ' . $e->getMessage();
         }
-
-        // Ensure passprob is within valid range
         $result->passprob = max(0, min(1, $result->passprob));
         return $result;
     }
 
-    /**
-     * Calculate risk level based on pass probability.
-     *
-     * @param float $passprob Pass probability
-     * @return int Risk level (1=low, 2=medium, 3=high)
-     */
     protected function calculate_risk_level($passprob) {
-        // Get risk thresholds from settings with defaults
         $lowrisk = get_config('block_studentperformancepredictor', 'lowrisk');
         if (empty($lowrisk) || !is_numeric($lowrisk)) {
-            $lowrisk = 0.7; // Default
+            $lowrisk = 0.7;
         }
-
         $mediumrisk = get_config('block_studentperformancepredictor', 'mediumrisk');
         if (empty($mediumrisk) || !is_numeric($mediumrisk)) {
-            $mediumrisk = 0.4; // Default
+            $mediumrisk = 0.4;
         }
-
         if ($passprob >= $lowrisk) {
-            return 1; // Low risk
+            return 1;
         } else if ($passprob >= $mediumrisk) {
-            return 2; // Medium risk
+            return 2;
         } else {
-            return 3; // High risk
+            return 3;
         }
     }
 
-    /**
-     * Generate predictions for all students in the course.
-     *
-     * @return array Array of prediction records
-     */
     public function predict_for_all_students() {
         global $DB;
-
         $context = \context_course::instance($this->courseid);
         $students = get_enrolled_users($context, 'moodle/course:isincompletionreports');
-
         $predictions = array();
         $errors = array();
-
         foreach ($students as $student) {
             try {
                 $prediction = $this->predict_for_student($student->id);
                 $predictions[] = $prediction;
             } catch (\Exception $e) {
-                // Log error and continue with next student
                 debugging('Error predicting for student ' . $student->id . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
                 $errors[$student->id] = $e->getMessage();
             }
         }
-
-        // Log summary
-        debugging('Predictions generated for ' . count($predictions) . ' students with ' .
-                 count($errors) . ' errors', DEBUG_DEVELOPER);
-
+        debugging('Predictions generated for ' . count($predictions) . ' students with ' . count($errors) . ' errors', DEBUG_DEVELOPER);
         return $predictions;
     }
 }
@@ -5240,231 +4117,6 @@ class suggestion_generator {
 }
 
 <?php
-// blocks/studentperformancepredictor/classes/analytics/training_manager.php
-
-namespace block_studentperformancepredictor\analytics;
-
-defined('MOODLE_INTERNAL') || die();
-
-/**
- * Training manager for student performance predictor.
- *
- * This class manages the model training process through the Python backend API.
- *
- * @package    block_studentperformancepredictor
- * @copyright  2023 Your Name <[Email]>
- * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
-*/
-class training_manager {
-    /**
-     * Schedules a model training task.
-     *
-     * @param int $courseid The course ID
-     * @param int $datasetid The dataset ID
-     * @param string|null $algorithm Optional algorithm to use
-     * @return bool True if task was scheduled successfully
-     */
-    public static function schedule_training(int $courseid, int $datasetid, ?string $algorithm = null): bool {
-        global $USER, $DB;
-
-        // Verify the dataset exists and belongs to the course.
-        $dataset = $DB->get_record('block_spp_datasets', ['id' => $datasetid, 'courseid' => $courseid]);
-        if (!$dataset) {
-            debugging('Dataset not found or does not belong to course', DEBUG_DEVELOPER);
-            return false;
-        }
-
-        // Create a record in block_spp_models table with trainstatus='pending'
-        $model = new \stdClass();
-        $model->courseid = $courseid;
-        $model->datasetid = $datasetid;
-        $model->modelname = ($algorithm ? ucfirst($algorithm) : 'Model') . ' - ' . date('Y-m-d H:i');
-        $model->algorithmtype = $algorithm ?? 'randomforest';
-        $model->active = 0;
-        $model->trainstatus = 'pending';
-        $model->timecreated = time();
-        $model->timemodified = time();
-        $model->usermodified = $USER->id;
-
-        $modelid = $DB->insert_record('block_spp_models', $model);
-        if (!$modelid) {
-            debugging('Error creating model record', DEBUG_DEVELOPER);
-            return false;
-        }
-
-        // Create adhoc task with the correct namespace/class
-        $task = new \block_studentperformancepredictor\task\adhoc_train_model();
-        $customdata = [
-            'courseid' => $courseid,
-            'datasetid' => $datasetid,
-            'algorithm' => $algorithm,
-            'userid' => $USER->id,
-            'modelid' => $modelid,
-            'timequeued' => time()
-        ];
-        $task->set_custom_data($customdata);
-
-        // Add debugging information
-        debugging('Scheduling training task for course ' . $courseid . ' with dataset ' . $datasetid, DEBUG_DEVELOPER);
-
-        try {
-            // Queue the task with high priority
-            \core\task\manager::queue_adhoc_task($task, true);
-            debugging('Training task scheduled successfully', DEBUG_DEVELOPER);
-
-            // Log initial training event
-            self::log_training_event($modelid, 'scheduled', 'Training task scheduled');
-
-            return true;
-        } catch (\Exception $e) {
-            debugging('Error scheduling training task: ' . $e->getMessage(), DEBUG_DEVELOPER);
-
-            // Update the model record to indicate failure
-            $model = $DB->get_record('block_spp_models', ['id' => $modelid]);
-            if ($model) {
-                $model->trainstatus = 'failed';
-                $model->errormessage = 'Failed to schedule training task: ' . $e->getMessage();
-                $DB->update_record('block_spp_models', $model);
-            }
-
-            return false;
-        }
-    }
-
-    /**
-     * Check if there's already a training task scheduled.
-     *
-     * @param int $courseid The course ID
-     * @return bool True if a task exists
-     */
-    public static function has_pending_training($courseid) {
-        global $DB;
-
-        // Check for pending models in the database
-        $sql = "SELECT COUNT(*) FROM {block_spp_models} 
-                WHERE courseid = :courseid AND trainstatus IN ('pending', 'training')";
-        $count = $DB->count_records_sql($sql, ['courseid' => $courseid]);
-
-        if ($count > 0) {
-            return true;
-        }
-
-        // Also check for pending adhoc_train_model tasks
-        $sql = "SELECT COUNT(*) FROM {task_adhoc}
-                WHERE classname = :classname
-                AND " . $DB->sql_like('customdata', ':customdata') . "
-                AND nextruntime > 0";
-
-        $params = [
-            'classname' => '\\block_studentperformancepredictor\\task\\adhoc_train_model',
-            'customdata' => '%"courseid":' . $courseid . '%'
-        ];
-
-        $count = $DB->count_records_sql($sql, $params);
-
-        return $count > 0;
-    }
-
-    /**
-     * Logs a training event.
-     *
-     * @param int $modelid The model ID
-     * @param string $event The event type
-     * @param string $message The log message
-     * @param string $level The log level (error, warning, info)
-     * @return bool True if logged successfully
-     */
-    public static function log_training_event($modelid, $event, $message, $level = 'info') {
-        global $DB;
-
-        // Only log if modelid is valid
-        if (empty($modelid) || $modelid <= 0) {
-            debugging("Skipping training log: invalid modelid ($modelid) for event '$event'", DEBUG_DEVELOPER);
-            return false;
-        }
-
-        $log = new \stdClass();
-        $log->modelid = $modelid;
-        $log->event = $event;
-        $log->message = $message;
-        $log->level = $level;
-        $log->timecreated = time();
-
-        try {
-            $DB->insert_record('block_spp_training_log', $log);
-            debugging("Training log: [$level] $event - $message", DEBUG_DEVELOPER);
-            return true;
-        } catch (\Exception $e) {
-            debugging('Error logging training event: ' . $e->getMessage(), DEBUG_DEVELOPER);
-            return false;
-        }
-    }
-
-    /**
-     * Update model status after training.
-     *
-     * @param int $modelid The model ID
-     * @param string $status New status ('complete', 'failed')
-     * @param array $data Additional data (metrics, error message, etc.)
-     * @return bool True if updated successfully
-     */
-    public static function update_model_status($modelid, $status, $data = []) {
-        global $DB;
-
-        // Only update if modelid is valid
-        if (empty($modelid) || $modelid <= 0) {
-            debugging("Cannot update model status: invalid modelid ($modelid)", DEBUG_DEVELOPER);
-            return false;
-        }
-
-        try {
-            $model = $DB->get_record('block_spp_models', ['id' => $modelid]);
-            if (!$model) {
-                debugging("Model not found with ID: $modelid", DEBUG_DEVELOPER);
-                return false;
-            }
-
-            // Update model fields
-            $model->trainstatus = $status;
-            $model->timemodified = time();
-
-            // Add any additional data
-            if (isset($data['accuracy'])) {
-                $model->accuracy = $data['accuracy'];
-            }
-
-            if (isset($data['metrics'])) {
-                $model->metrics = json_encode($data['metrics']);
-            }
-
-            if (isset($data['modelid'])) {
-                $model->modelid = $data['modelid'];
-            }
-
-            if (isset($data['modelpath'])) {
-                $model->modelpath = $data['modelpath'];
-            }
-
-            if (isset($data['error'])) {
-                $model->errormessage = $data['error'];
-                self::log_training_event($modelid, 'error', $data['error'], 'error');
-            }
-
-            // Update the record
-            $DB->update_record('block_spp_models', $model);
-
-            // Log the status change
-            self::log_training_event($modelid, 'status_change', "Model status changed to: $status");
-
-            return true;
-        } catch (\Exception $e) {
-            debugging('Error updating model status: ' . $e->getMessage(), DEBUG_DEVELOPER);
-            return false;
-        }
-    }
-}
-
-<?php
 // blocks/studentperformancepredictor/classes/event/model_trained.php
 
 namespace block_studentperformancepredictor\event;
@@ -5547,6 +4199,72 @@ require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
  */
 class api extends \external_api {
 
+    // ... (other functions remain the same)
+
+    /**
+     * Returns description of generate_student_prediction parameters.
+     *
+     * @return \external_function_parameters
+     */
+    public static function generate_student_prediction_parameters() {
+        return new \external_function_parameters([
+            'courseid' => new \external_value(PARAM_INT, 'The course id'),
+            'userid'   => new \external_value(PARAM_INT, 'The user id'),
+        ]);
+    }
+
+    /**
+     * Generates a new prediction for a student.
+     *
+     * @param int $courseid The course id.
+     * @param int $userid The user id.
+     * @return array The result of the operation.
+     */
+    public static function generate_student_prediction(int $courseid, int $userid) {
+        global $USER;
+
+        $params = self::validate_parameters(self::generate_student_prediction_parameters(), [
+            'courseid' => $courseid,
+            'userid'   => $userid,
+        ]);
+
+        $context = \context_course::instance($params['courseid']);
+        self::validate_context($context);
+
+        // Security check: ensure the user can only generate their own prediction,
+        // or that they have permission to view all predictions.
+        if ($params['userid'] != $USER->id && !has_capability('block/studentperformancepredictor:viewallpredictions', $context)) {
+            throw new \moodle_exception('nopermission', 'error');
+        }
+
+        // Call the library function to generate a new prediction.
+        $prediction = block_studentperformancepredictor_generate_new_prediction($params['courseid'], $params['userid']);
+
+        if ($prediction) {
+            return [
+                'success' => true,
+                'message' => get_string('predictiongenerated', 'block_studentperformancepredictor'),
+            ];
+        } else {
+            return [
+                'success' => false,
+                'message' => get_string('predictionerror', 'block_studentperformancepredictor'),
+            ];
+        }
+    }
+
+    /**
+     * Returns description of generate_student_prediction returns.
+     *
+     * @return \external_single_structure
+     */
+    public static function generate_student_prediction_returns() {
+        return new \external_single_structure([
+            'success' => new \external_value(PARAM_BOOL, 'True if the prediction was generated successfully'),
+            'message' => new \external_value(PARAM_TEXT, 'A message indicating the result of the operation'),
+        ]);
+    }
+
     /**
      * Returns description of mark_suggestion_viewed parameters.
      *
@@ -5566,32 +4284,15 @@ class api extends \external_api {
      */
     public static function mark_suggestion_viewed($suggestionid) {
         global $DB, $USER;
-
-        // Validate parameters.
-        $params = self::validate_parameters(self::mark_suggestion_viewed_parameters(), [
-            'suggestionid' => $suggestionid
-        ]);
-
-        // Get suggestion.
+        $params = self::validate_parameters(self::mark_suggestion_viewed_parameters(), ['suggestionid' => $suggestionid]);
         $suggestion = $DB->get_record('block_spp_suggestions', ['id' => $params['suggestionid']], '*', MUST_EXIST);
-
-        // Security checks.
         $context = \context_course::instance($suggestion->courseid);
         self::validate_context($context);
-
-        // Only the user who received the suggestion can mark it as viewed.
         if ($suggestion->userid != $USER->id) {
             throw new \moodle_exception('nopermission', 'block_studentperformancepredictor');
         }
-
-        // Mark as viewed.
         $success = block_studentperformancepredictor_mark_suggestion_viewed($suggestion->id);
-
-        return [
-            'status' => $success,
-            'message' => $success ? get_string('suggestion_marked_viewed', 'block_studentperformancepredictor') 
-                                 : get_string('suggestion_marked_viewed_error', 'block_studentperformancepredictor')
-        ];
+        return ['status' => $success, 'message' => $success ? get_string('suggestion_marked_viewed', 'block_studentperformancepredictor') : get_string('suggestion_marked_viewed_error', 'block_studentperformancepredictor')];
     }
 
     /**
@@ -5625,32 +4326,15 @@ class api extends \external_api {
      */
     public static function mark_suggestion_completed($suggestionid) {
         global $DB, $USER;
-
-        // Validate parameters.
-        $params = self::validate_parameters(self::mark_suggestion_completed_parameters(), [
-            'suggestionid' => $suggestionid
-        ]);
-
-        // Get suggestion.
+        $params = self::validate_parameters(self::mark_suggestion_completed_parameters(), ['suggestionid' => $suggestionid]);
         $suggestion = $DB->get_record('block_spp_suggestions', ['id' => $params['suggestionid']], '*', MUST_EXIST);
-
-        // Security checks.
         $context = \context_course::instance($suggestion->courseid);
         self::validate_context($context);
-
-        // Only the user who received the suggestion can mark it as completed.
         if ($suggestion->userid != $USER->id) {
             throw new \moodle_exception('nopermission', 'block_studentperformancepredictor');
         }
-
-        // Mark as completed.
         $success = block_studentperformancepredictor_mark_suggestion_completed($suggestion->id);
-
-        return [
-            'status' => $success,
-            'message' => $success ? get_string('suggestion_marked_completed', 'block_studentperformancepredictor') 
-                                 : get_string('suggestion_marked_completed_error', 'block_studentperformancepredictor')
-        ];
+        return ['status' => $success, 'message' => $success ? get_string('suggestion_marked_completed', 'block_studentperformancepredictor') : get_string('suggestion_marked_completed_error', 'block_studentperformancepredictor')];
     }
 
     /**
@@ -5685,64 +4369,31 @@ class api extends \external_api {
      * @return array Prediction data
      */
     public static function get_student_predictions($courseid, $userid = 0) {
-        global $USER, $DB;
-
-        // Validate parameters.
-        $params = self::validate_parameters(self::get_student_predictions_parameters(), [
-            'courseid' => $courseid,
-            'userid' => $userid
-        ]);
-
-        // Security checks.
+        global $USER;
+        $params = self::validate_parameters(self::get_student_predictions_parameters(), ['courseid' => $courseid, 'userid' => $userid]);
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
-
-        // If no user ID specified, use current user.
         if (empty($params['userid'])) {
             $params['userid'] = $USER->id;
         }
-
-        // Check permission if viewing other user's predictions.
         if ($params['userid'] != $USER->id && !has_capability('block/studentperformancepredictor:viewallpredictions', $context)) {
             throw new \moodle_exception('nopermission', 'block_studentperformancepredictor');
         }
-
-        // Get prediction.
         $prediction = block_studentperformancepredictor_get_student_prediction($params['courseid'], $params['userid']);
-
         if (!$prediction) {
-            return [
-                'has_prediction' => false,
-                'message' => get_string('noprediction', 'block_studentperformancepredictor')
-            ];
+            return ['has_prediction' => false, 'message' => get_string('noprediction', 'block_studentperformancepredictor')];
         }
-
-        // Get suggestions.
         $suggestions = block_studentperformancepredictor_get_suggestions($prediction->id);
-
-        $suggestiondata = [];
-        foreach ($suggestions as $suggestion) {
-            $suggestiondata[] = [
-                'id' => $suggestion->id,
-                'reason' => $suggestion->reason,
-                'resource_type' => $suggestion->resourcetype,
-                'viewed' => (bool)$suggestion->viewed,
-                'completed' => (bool)$suggestion->completed,
-                'cmid' => $suggestion->cmid,
-                'cmname' => $suggestion->cmname ?? '',
-                'modulename' => $suggestion->modulename ?? ''
-            ];
-        }
-
+        $suggestiondata = array_map(function($s) {
+            return ['id' => $s->id, 'reason' => $s->reason, 'viewed' => (bool)$s->viewed, 'completed' => (bool)$s->completed];
+        }, $suggestions);
         return [
             'has_prediction' => true,
             'prediction' => [
                 'id' => $prediction->id,
                 'pass_probability' => round($prediction->passprob * 100),
                 'risk_level' => $prediction->riskvalue,
-                'risk_text' => block_studentperformancepredictor_get_risk_text($prediction->riskvalue),
-                'time_created' => $prediction->timecreated,
-                'time_modified' => $prediction->timemodified
+                'risk_text' => block_studentperformancepredictor_get_risk_text($prediction->riskvalue)
             ],
             'suggestions' => $suggestiondata
         ];
@@ -5760,23 +4411,15 @@ class api extends \external_api {
                 'id' => new \external_value(PARAM_INT, 'Prediction ID'),
                 'pass_probability' => new \external_value(PARAM_INT, 'Pass probability percentage'),
                 'risk_level' => new \external_value(PARAM_INT, 'Risk level (1-3)'),
-                'risk_text' => new \external_value(PARAM_TEXT, 'Risk level text'),
-                'time_created' => new \external_value(PARAM_INT, 'Time created timestamp'),
-                'time_modified' => new \external_value(PARAM_INT, 'Time modified timestamp')
+                'risk_text' => new \external_value(PARAM_TEXT, 'Risk level text')
             ], 'Prediction data', VALUE_OPTIONAL),
             'suggestions' => new \external_multiple_structure(
                 new \external_single_structure([
                     'id' => new \external_value(PARAM_INT, 'Suggestion ID'),
                     'reason' => new \external_value(PARAM_TEXT, 'Suggestion reason'),
-                    'resource_type' => new \external_value(PARAM_TEXT, 'Resource type'),
                     'viewed' => new \external_value(PARAM_BOOL, 'Whether suggestion was viewed'),
-                    'completed' => new \external_value(PARAM_BOOL, 'Whether suggestion was completed'),
-                    'cmid' => new \external_value(PARAM_INT, 'Course module ID', VALUE_OPTIONAL),
-                    'cmname' => new \external_value(PARAM_TEXT, 'Course module name', VALUE_OPTIONAL),
-                    'modulename' => new \external_value(PARAM_TEXT, 'Module name', VALUE_OPTIONAL)
-                ]),
-                'Suggestions',
-                VALUE_OPTIONAL
+                    'completed' => new \external_value(PARAM_BOOL, 'Whether suggestion was completed')
+                ]), 'Suggestions', VALUE_OPTIONAL
             ),
             'message' => new \external_value(PARAM_TEXT, 'Message if no prediction', VALUE_OPTIONAL)
         ]);
@@ -5805,37 +4448,19 @@ class api extends \external_api {
      */
     public static function trigger_model_training($courseid, $datasetid, $algorithm = '') {
         global $USER;
-
-        // Validate parameters.
-        $params = self::validate_parameters(self::trigger_model_training_parameters(), [
-            'courseid' => $courseid,
-            'datasetid' => $datasetid,
-            'algorithm' => $algorithm
-        ]);
-
-        // Security checks.
+        $params = self::validate_parameters(self::trigger_model_training_parameters(), ['courseid' => $courseid, 'datasetid' => $datasetid, 'algorithm' => $algorithm]);
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
-
-        // Check permission.
         require_capability('block/studentperformancepredictor:managemodels', $context);
-
-        // Queue the training task.
-        $task = new \block_studentperformancepredictor\task\train_model();
+        $task = new \block_studentperformancepredictor\task\adhoc_train_model();
         $task->set_custom_data([
             'courseid' => $params['courseid'],
             'datasetid' => $params['datasetid'],
             'algorithm' => $params['algorithm'],
             'userid' => $USER->id
         ]);
-
-        // Queue the task to run as soon as possible.
         \core\task\manager::queue_adhoc_task($task, true);
-
-        return [
-            'status' => true,
-            'message' => get_string('model_training_queued', 'block_studentperformancepredictor')
-        ];
+        return ['status' => true, 'message' => get_string('model_training_queued_backend', 'block_studentperformancepredictor')];
     }
 
     /**
@@ -5868,28 +4493,37 @@ class api extends \external_api {
      * @return array Operation result
      */
     public static function refresh_predictions($courseid) {
-        global $USER;
+        global $DB;
 
-        // Validate parameters.
-        $params = self::validate_parameters(self::refresh_predictions_parameters(), [
-            'courseid' => $courseid
-        ]);
-
-        // Security checks.
+        $params = self::validate_parameters(self::refresh_predictions_parameters(), ['courseid' => $courseid]);
         $context = \context_course::instance($params['courseid']);
         self::validate_context($context);
-
-        // Check permission.
         require_capability('block/studentperformancepredictor:viewallpredictions', $context);
 
-        // Trigger refresh.
-        $success = block_studentperformancepredictor_trigger_prediction_refresh($params['courseid'], $USER->id);
+        // Bypassing the task queue and running the refresh immediately.
+        // This can be slow on large courses but is more reliable if cron/tasks are not configured correctly.
+        try {
+            $result = block_studentperformancepredictor_execute_prediction_refresh_now($params['courseid']);
+            $course = $DB->get_record('course', ['id' => $params['courseid']], 'fullname', MUST_EXIST);
 
-        return [
-            'status' => $success,
-            'message' => $success ? get_string('predictionsrefreshqueued', 'block_studentperformancepredictor') 
-                                 : get_string('predictionsrefresherror', 'block_studentperformancepredictor')
-        ];
+            // Using a detailed success string from the language file.
+            $messagedata = new \stdClass();
+            $messagedata->coursename = format_string($course->fullname);
+            $messagedata->total = $result['total'];
+            $messagedata->success = $result['success'];
+            $messagedata->errors = $result['errors'];
+            
+            return [
+                'status' => true,
+                'message' => get_string('prediction_refresh_complete_message', 'block_studentperformancepredictor', $messagedata)
+            ];
+        } catch (\Exception $e) {
+            // Return a JSON-formatted error response
+            return [
+                'status' => false,
+                'message' => get_string('predictionsrefresherror', 'block_studentperformancepredictor') . ': ' . $e->getMessage()
+            ];
+        }
     }
 
     /**
@@ -5912,572 +4546,143 @@ namespace block_studentperformancepredictor\output;
 
 defined('MOODLE_INTERNAL') || die();
 
-// Add this line to include lib.php which contains the function definitions
 require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
 
-/**
- * Admin view class for the admin dashboard.
- *
- * This class prepares data for the admin dashboard template.
- */
 class admin_view implements \renderable, \templatable {
-    /** @var int Course ID - for admin view this can be 0 to show all courses */
     protected $courseid;
 
-    /** @var int The filter course ID if filtering by a specific course */
-    protected $filter_courseid;
-
-    /** @var bool Is this a site-wide admin view */
-    protected $is_sitewide;
-
-    /**
-     * Constructor.
-     *
-     * @param int $courseid Course ID (0 for all courses)
-     * @param int $filter_courseid Optional course ID to filter by
-     */
-    public function __construct($courseid, $filter_courseid = 0) {
+    public function __construct($courseid) {
         $this->courseid = $courseid;
-        $this->filter_courseid = $filter_courseid;
-        $this->is_sitewide = ($courseid === 0);
     }
 
-    /**
-     * Export data for template.
-     *
-     * @param \renderer_base $output The renderer
-     * @return \stdClass Data for template
-     */
     public function export_for_template(\renderer_base $output) {
-        global $CFG, $DB, $PAGE;
+        global $DB;
 
         $data = new \stdClass();
         $data->heading = get_string('modelmanagement', 'block_studentperformancepredictor');
         $data->courseid = $this->courseid;
-        $data->is_sitewide = $this->is_sitewide;
 
-        // Create URLs
-        $data->managemodelsurl = new \moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', 
-                                             ['courseid' => $this->courseid]);
-        $data->managedatasetsurl = new \moodle_url('/blocks/studentperformancepredictor/admin/managedatasets.php', 
-                                               ['courseid' => $this->courseid]);
-        $data->refreshpredictionsurl = new \moodle_url('/blocks/studentperformancepredictor/admin/refreshpredictions.php', 
-                                                   ['courseid' => $this->courseid]);
+        $data->managemodelsurl = new \moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', ['courseid' => $this->courseid]);
+        $data->managedatasetsurl = new \moodle_url('/blocks/studentperformancepredictor/admin/managedatasets.php', ['courseid' => $this->courseid]);
+        
+        $data->hasmodel = \block_studentperformancepredictor_has_active_model($this->courseid);
 
-        // For site-wide admin, we need to get courses with active models
-        if ($this->is_sitewide) {
-            // Get courses with active models
-            $courses_with_models = $this->get_courses_with_models();
-            $data->has_courses = !empty($courses_with_models);
-            $data->courses = $courses_with_models;
+        if ($data->hasmodel) {
+            $riskStats = \block_studentperformancepredictor_get_course_risk_stats($this->courseid);
+            $data->totalstudents = $riskStats->total;
+            $data->highrisk = $riskStats->highrisk;
+            $data->mediumrisk = $riskStats->mediumrisk;
+            $data->lowrisk = $riskStats->lowrisk;
 
-            // Check if we're filtering by a specific course
-            if ($this->filter_courseid && isset($courses_with_models[$this->filter_courseid])) {
-                $data->filter_courseid = $this->filter_courseid;
-                $data->filter_coursename = $courses_with_models[$this->filter_courseid]->fullname;
-                $data->is_filtered = true;
-
-                // Create course selector URL
-                $data->course_selector_url = new \moodle_url('/blocks/studentperformancepredictor/reports.php', 
-                                                         ['admin' => 1]);
-
-                // For filtered view, get stats and students for the selected course
-                $active_courseid = $this->filter_courseid;
-                $data->hasmodel = \block_studentperformancepredictor_has_active_model($active_courseid);
-
-                if ($data->hasmodel) {
-                    // Get risk statistics for this course
-                    $riskStats = \block_studentperformancepredictor_get_course_risk_stats($active_courseid);
-
-                    $data->totalstudents = $riskStats->total;
-                    $data->highrisk = $riskStats->highrisk;
-                    $data->mediumrisk = $riskStats->mediumrisk;
-                    $data->lowrisk = $riskStats->lowrisk;
-
-                    // Calculate percentages
-                    if ($data->totalstudents > 0) {
-                        $data->highriskpercent = round(($data->highrisk / $data->totalstudents) * 100);
-                        $data->mediumriskpercent = round(($data->mediumrisk / $data->totalstudents) * 100);
-                        $data->lowriskpercent = round(($data->lowrisk / $data->totalstudents) * 100);
-                    } else {
-                        $data->highriskpercent = 0;
-                        $data->mediumriskpercent = 0;
-                        $data->lowriskpercent = 0;
-                    }
-
-                    // Get students in this course by risk level
-                    $data->students_highrisk = $this->get_students_by_risk_level(3, $active_courseid);
-                    $data->students_mediumrisk = $this->get_students_by_risk_level(2, $active_courseid);
-                    $data->students_lowrisk = $this->get_students_by_risk_level(1, $active_courseid);
-
-                    // Check if we have students in each category
-                    $data->has_highrisk_students = !empty($data->students_highrisk);
-                    $data->has_mediumrisk_students = !empty($data->students_mediumrisk);
-                    $data->has_lowrisk_students = !empty($data->students_lowrisk);
-
-                    // Create chart data for this course
-                    $data->haschart = true;
-                    $chartData = [
-                        'labels' => [
-                            get_string('highrisk_label', 'block_studentperformancepredictor'),
-                            get_string('mediumrisk_label', 'block_studentperformancepredictor'),
-                            get_string('lowrisk_label', 'block_studentperformancepredictor')
-                        ],
-                        'data' => [$data->highrisk, $data->mediumrisk, $data->lowrisk]
-                    ];
-                    $data->chartdata = json_encode($chartData);
-                }
+            if ($data->totalstudents > 0) {
+                $data->highriskpercent = round(($data->highrisk / $data->totalstudents) * 100);
+                $data->mediumriskpercent = round(($data->mediumrisk / $data->totalstudents) * 100);
+                $data->lowriskpercent = round(($data->lowrisk / $data->totalstudents) * 100);
             } else {
-                // Not filtering - show aggregated stats for all courses
-                $data->is_filtered = false;
-                $data->sitewide_stats = $this->get_sitewide_risk_stats();
-
-                // Get high risk students across all courses
-                $data->all_highrisk_students = $this->get_all_students_by_risk_level(3);
-                $data->has_highrisk_students = !empty($data->all_highrisk_students);
-
-                // Create global chart data
-                $data->haschart = true;
-                $chartData = [
-                    'labels' => [
-                        get_string('highrisk_label', 'block_studentperformancepredictor'),
-                        get_string('mediumrisk_label', 'block_studentperformancepredictor'),
-                        get_string('lowrisk_label', 'block_studentperformancepredictor')
-                    ],
-                    'data' => [
-                        $data->sitewide_stats->highrisk, 
-                        $data->sitewide_stats->mediumrisk, 
-                        $data->sitewide_stats->lowrisk
-                    ]
-                ];
-                $data->chartdata = json_encode($chartData);
+                $data->highriskpercent = 0;
+                $data->mediumriskpercent = 0;
+                $data->lowriskpercent = 0;
             }
+
+            $data->students_highrisk = $this->get_students_by_risk_level(3);
+            $data->students_mediumrisk = $this->get_students_by_risk_level(2);
+            $data->students_lowrisk = $this->get_students_by_risk_level(1);
+
+            $data->has_highrisk_students = !empty($data->students_highrisk);
+            $data->has_mediumrisk_students = !empty($data->students_mediumrisk);
+            $data->has_lowrisk_students = !empty($data->students_lowrisk);
         } else {
-            // Course-specific admin view
-            $data->hasmodel = \block_studentperformancepredictor_has_active_model($this->courseid);
-
-            if ($data->hasmodel) {
-                // Get risk statistics
-                $riskStats = \block_studentperformancepredictor_get_course_risk_stats($this->courseid);
-
-                $data->totalstudents = $riskStats->total;
-                $data->highrisk = $riskStats->highrisk;
-                $data->mediumrisk = $riskStats->mediumrisk;
-                $data->lowrisk = $riskStats->lowrisk;
-
-                // Calculate percentages
-                if ($data->totalstudents > 0) {
-                    $data->highriskpercent = round(($data->highrisk / $data->totalstudents) * 100);
-                    $data->mediumriskpercent = round(($data->mediumrisk / $data->totalstudents) * 100);
-                    $data->lowriskpercent = round(($data->lowrisk / $data->totalstudents) * 100);
-                } else {
-                    $data->highriskpercent = 0;
-                    $data->mediumriskpercent = 0;
-                    $data->lowriskpercent = 0;
-                }
-
-                // Get students by risk level
-                $data->students_highrisk = $this->get_students_by_risk_level(3, $this->courseid);
-                $data->students_mediumrisk = $this->get_students_by_risk_level(2, $this->courseid);
-                $data->students_lowrisk = $this->get_students_by_risk_level(1, $this->courseid);
-
-                // Check if we have students in each category
-                $data->has_highrisk_students = !empty($data->students_highrisk);
-                $data->has_mediumrisk_students = !empty($data->students_mediumrisk);
-                $data->has_lowrisk_students = !empty($data->students_lowrisk);
-
-                // Create chart data
-                $data->haschart = true;
-                $chartData = [
-                    'labels' => [
-                        get_string('highrisk_label', 'block_studentperformancepredictor'),
-                        get_string('mediumrisk_label', 'block_studentperformancepredictor'),
-                        get_string('lowrisk_label', 'block_studentperformancepredictor')
-                    ],
-                    'data' => [$data->highrisk, $data->mediumrisk, $data->lowrisk]
-                ];
-                $data->chartdata = json_encode($chartData);
-            } else {
-                $data->nomodeltext = get_string('noactivemodel', 'block_studentperformancepredictor');
-            }
+            $data->nomodeltext = get_string('noactivemodel', 'block_studentperformancepredictor');
         }
-
         return $data;
     }
 
-    /**
-     * Get courses that have active prediction models.
-     *
-     * @return array Course objects with model information
-     */
-    protected function get_courses_with_models() {
-        global $DB;
-
-        $sql = "SELECT c.id, c.fullname, c.shortname, c.visible, 
-                       COUNT(DISTINCT p.id) as prediction_count,
-                       SUM(CASE WHEN p.riskvalue = 3 THEN 1 ELSE 0 END) as highrisk,
-                       SUM(CASE WHEN p.riskvalue = 2 THEN 1 ELSE 0 END) as mediumrisk,
-                       SUM(CASE WHEN p.riskvalue = 1 THEN 1 ELSE 0 END) as lowrisk
-                FROM {course} c
-                JOIN {block_spp_predictions} p ON p.courseid = c.id
-                JOIN {block_spp_models} m ON p.modelid = m.id
-                WHERE m.active = 1
-                GROUP BY c.id, c.fullname, c.shortname, c.visible
-                ORDER BY highrisk DESC, c.fullname ASC";
-
-        $courses = $DB->get_records_sql($sql);
-
-        // Format the course data for display
-        foreach ($courses as $course) {
-            // Calculate percentages
-            $total = $course->prediction_count;
-            if ($total > 0) {
-                $course->highrisk_percent = round(($course->highrisk / $total) * 100);
-                $course->mediumrisk_percent = round(($course->mediumrisk / $total) * 100);
-                $course->lowrisk_percent = round(($course->lowrisk / $total) * 100);
-            } else {
-                $course->highrisk_percent = 0;
-                $course->mediumrisk_percent = 0;
-                $course->lowrisk_percent = 0;
-            }
-
-            // Add view URL
-            $course->view_url = new \moodle_url('/blocks/studentperformancepredictor/reports.php', 
-                                              ['admin' => 1, 'courseid' => $course->id]);
-        }
-
-        return $courses;
-    }
-
-    /**
-     * Get aggregated risk statistics across all courses.
-     *
-     * @return object Object with risk statistics
-     */
-    protected function get_sitewide_risk_stats() {
-        global $DB;
-
-        $stats = new \stdClass();
-
-        // Get counts from all predictions
-        $sql = "SELECT COUNT(DISTINCT p.id) as total,
-                       SUM(CASE WHEN p.riskvalue = 3 THEN 1 ELSE 0 END) as highrisk,
-                       SUM(CASE WHEN p.riskvalue = 2 THEN 1 ELSE 0 END) as mediumrisk,
-                       SUM(CASE WHEN p.riskvalue = 1 THEN 1 ELSE 0 END) as lowrisk
-                FROM {block_spp_predictions} p
-                JOIN {block_spp_models} m ON p.modelid = m.id
-                WHERE m.active = 1";
-
-        $result = $DB->get_record_sql($sql);
-
-        if ($result) {
-            $stats->total = $result->total;
-            $stats->highrisk = $result->highrisk;
-            $stats->mediumrisk = $result->mediumrisk;
-            $stats->lowrisk = $result->lowrisk;
-
-            // Calculate percentages
-            if ($stats->total > 0) {
-                $stats->highriskpercent = round(($stats->highrisk / $stats->total) * 100);
-                $stats->highriskpercent = round(($stats->highrisk / $stats->total) * 100);
-                $stats->mediumriskpercent = round(($stats->mediumrisk / $stats->total) * 100);
-                $stats->lowriskpercent = round(($stats->lowrisk / $stats->total) * 100);
-            } else {
-                $stats->highriskpercent = 0;
-                $stats->mediumriskpercent = 0;
-                $stats->lowriskpercent = 0;
-            }
-        } else {
-            // Default values if no predictions exist
-            $stats->total = 0;
-            $stats->highrisk = 0;
-            $stats->mediumrisk = 0;
-            $stats->lowrisk = 0;
-            $stats->highriskpercent = 0;
-            $stats->mediumriskpercent = 0;
-            $stats->lowriskpercent = 0;
-        }
-
-        return $stats;
-    }
-
-    /**
-     * Get students by risk level with prediction details for a specific course.
-     *
-     * @param int $risk_level Risk level (1=low, 2=medium, 3=high)
-     * @param int $courseid Course ID
-     * @return array Students with this risk level
-     */
-    protected function get_students_by_risk_level($risk_level, $courseid) {
+    protected function get_students_by_risk_level($risk_level) {
         global $DB, $PAGE;
 
-        $sql = "SELECT p.*, u.id as userid, u.firstname, u.lastname, u.email, u.picture, u.imagealt, 
-                       u.firstnamephonetic, u.lastnamephonetic, u.middlename, u.alternatename,
-                       c.fullname as coursename, c.shortname as courseshortname
+        $sql = "SELECT p.id AS predictionid, p.passprob, p.predictiondata, u.*
                 FROM {block_spp_predictions} p
                 JOIN {user} u ON p.userid = u.id
-                JOIN {course} c ON p.courseid = c.id
                 JOIN {block_spp_models} m ON p.modelid = m.id
-                WHERE p.courseid = :courseid 
-                AND p.riskvalue = :risklevel
-                AND m.active = 1
+                JOIN (
+                    SELECT userid, MAX(timemodified) AS maxtime
+                    FROM {block_spp_predictions}
+                    WHERE courseid = :courseid
+                    GROUP BY userid
+                ) AS latest_p ON p.userid = latest_p.userid AND p.timemodified = latest_p.maxtime
+                WHERE p.courseid = :courseid2
+                  AND p.riskvalue = :risklevel
+                  AND m.active = 1
                 ORDER BY u.lastname, u.firstname";
-
-        $params = [
-            'courseid' => $courseid,
-            'risklevel' => $risk_level
-        ];
-
+        
+        $params = ['courseid' => $this->courseid, 'courseid2' => $this->courseid, 'risklevel' => $risk_level];
         $records = $DB->get_records_sql($sql, $params);
         $students = [];
 
         foreach ($records as $record) {
-            // Get prediction details
-            $prediction_data = json_decode($record->predictiondata, true);
-
-            // Extract risk factors from prediction data
-            $risk_factors = $this->extract_risk_factors($prediction_data, $risk_level);
-
-            // Get user picture URL
             $user_picture = new \user_picture($record);
-            $user_picture->size = 35; // Size in pixels
-            $picture_url = $user_picture->get_url($PAGE);
+            $user_picture->size = 35;
 
-            // Create student object
             $student = new \stdClass();
-            $student->id = $record->userid;
+            $student->id = $record->id;
             $student->fullname = fullname($record);
             $student->picture = $user_picture->get_url($PAGE)->out(false);
             $student->passprob = round($record->passprob * 100);
-            $student->profileurl = new \moodle_url('/user/view.php', 
-                                                 ['id' => $record->userid, 'course' => $courseid]);
-            $student->risk_factors = $risk_factors;
-            $student->prediction_id = $record->id;
-            $student->coursename = $record->coursename;
-            $student->courseshortname = $record->courseshortname;
-            $student->generate_url = new \moodle_url('/blocks/studentperformancepredictor/generate_prediction.php', 
-                                                   ['courseid' => $courseid, 
-                                                    'userid' => $record->userid, 
-                                                    'sesskey' => sesskey()]);
-
-            $students[] = $student;
-        }
-
-        return $students;
-    }
-
-    /**
-     * Get all high-risk students across all courses.
-     *
-     * @param int $risk_level Risk level (1=low, 2=medium, 3=high)
-     * @return array Students with this risk level from all courses
-     */
-    protected function get_all_students_by_risk_level($risk_level) {
-        global $DB, $PAGE;
-
-        $sql = "SELECT p.*, u.id as userid, u.firstname, u.lastname, u.email, u.picture, u.imagealt, 
-                       u.firstnamephonetic, u.lastnamephonetic, u.middlename, u.alternatename,
-                       c.id as courseid, c.fullname as coursename, c.shortname as courseshortname
-                FROM {block_spp_predictions} p
-                JOIN {user} u ON p.userid = u.id
-                JOIN {course} c ON p.courseid = c.id
-                JOIN {block_spp_models} m ON p.modelid = m.id
-                WHERE p.riskvalue = :risklevel
-                AND m.active = 1
-                ORDER BY c.fullname, u.lastname, u.firstname";
-
-        $params = [
-            'risklevel' => $risk_level
-        ];
-
-        $records = $DB->get_records_sql($sql, $params);
-        $students = [];
-
-        foreach ($records as $record) {
-            // Get prediction details
+            $student->profileurl = new \moodle_url('/user/view.php', ['id' => $record->id, 'course' => $this->courseid]);
+            $student->generate_url = new \moodle_url('/blocks/studentperformancepredictor/generate_prediction.php',
+                                                   ['courseid' => $this->courseid, 'userid' => $record->id, 'sesskey' => sesskey()]);
+            
             $prediction_data = json_decode($record->predictiondata, true);
-
-            // Extract risk factors from prediction data
-            $risk_factors = $this->extract_risk_factors($prediction_data, $risk_level);
-
-            // Get user picture URL
-            $user_picture = new \user_picture($record);
-            $user_picture->size = 35; // Size in pixels
-            $picture_url = $user_picture->get_url($PAGE);
-
-            // Create student object
-            $student = new \stdClass();
-            $student->id = $record->userid;
-            $student->fullname = fullname($record);
-            $student->picture = $user_picture->get_url($PAGE)->out(false);
-            $student->passprob = round($record->passprob * 100);
-            $student->profileurl = new \moodle_url('/user/view.php', 
-                                                 ['id' => $record->userid, 'course' => $record->courseid]);
-            $student->risk_factors = $risk_factors;
-            $student->prediction_id = $record->id;
-            $student->courseid = $record->courseid;
-            $student->coursename = $record->coursename;
-            $student->courseshortname = $record->courseshortname;
-            $student->generate_url = new \moodle_url('/blocks/studentperformancepredictor/generate_prediction.php', 
-                                                   ['courseid' => $record->courseid, 
-                                                    'userid' => $record->userid, 
-                                                    'sesskey' => sesskey()]);
+            $student->risk_factors = $this->extract_risk_factors($prediction_data, $risk_level);
+            
+            $suggestions = \block_studentperformancepredictor_get_suggestions($record->predictionid);
+            $student->suggestions = [];
+            if (!empty($suggestions)) {
+                foreach (array_slice($suggestions, 0, 2) as $suggestion) { // Limit to 2 for a "short version"
+                    $suggestion_text = $suggestion->cmname;
+                    if (isset($suggestion->reason) && !empty($suggestion->reason)) {
+                        $suggestion_text .= ': ' . substr($suggestion->reason, 0, 50) . (strlen($suggestion->reason) > 50 ? '...' : '');
+                    }
+                    $student->suggestions[] = (object)['text' => $suggestion_text];
+                }
+            }
 
             $students[] = $student;
         }
-
         return $students;
     }
 
-    /**
-     * Extract risk factors from prediction data.
-     * 
-     * Same implementation as in the teacher_view class.
-     *
-     * @param array $prediction_data Prediction data from backend
-     * @param int $risk_level Risk level (1=low, 2=medium, 3=high)
-     * @return array Risk factors
-     */
     protected function extract_risk_factors($prediction_data, $risk_level) {
         $factors = [];
-
-        // Check if we have backend data
-        if (empty($prediction_data) || empty($prediction_data['backend'])) {
+        // This is the corrected access path.
+        if (empty($prediction_data) || !isset($prediction_data['features'])) {
             return [get_string('nofactorsavailable', 'block_studentperformancepredictor')];
         }
+        $features = $prediction_data['features'];
 
-        $backend_data = $prediction_data['backend'];
-
-        // Add activity level factor
-        if (isset($backend_data['features']['activity_level'])) {
-            $activity = (int)$backend_data['features']['activity_level'];
-            if ($risk_level == 3 && $activity < 5) {
-                $factors[] = get_string('factor_low_activity', 'block_studentperformancepredictor');
-            } else if ($risk_level == 2 && $activity < 10) {
-                $factors[] = get_string('factor_medium_activity', 'block_studentperformancepredictor');
-            } else if ($risk_level == 1 && $activity >= 15) {
-                $factors[] = get_string('factor_high_activity', 'block_studentperformancepredictor');
-            }
+        if (isset($features['activity_level']) && $features['activity_level'] < 5 && $risk_level >= 2) {
+            $factors[] = get_string('factor_low_activity', 'block_studentperformancepredictor');
+        }
+        if (isset($features['submission_count']) && $features['submission_count'] < 2 && $risk_level >= 2) {
+            $factors[] = get_string('factor_low_submissions', 'block_studentperformancepredictor');
+        }
+        if (isset($features['current_grade_percentage']) && $features['current_grade_percentage'] < 50 && $risk_level == 3) {
+            $factors[] = get_string('factor_low_grades', 'block_studentperformancepredictor');
+        }
+        if (isset($features['days_since_last_access']) && $features['days_since_last_access'] > 7 && $risk_level == 3) {
+            $factors[] = get_string('factor_not_logged_in', 'block_studentperformancepredictor', (int)$features['days_since_last_access']);
         }
 
-        // Add submission factor
-        if (isset($backend_data['features']['submission_count'])) {
-            $submissions = (int)$backend_data['features']['submission_count'];
-            if ($risk_level == 3 && $submissions < 2) {
-                $factors[] = get_string('factor_low_submissions', 'block_studentperformancepredictor');
-            } else if ($risk_level == 2 && $submissions < 4) {
-                $factors[] = get_string('factor_medium_submissions', 'block_studentperformancepredictor');
-            } else if ($risk_level == 1 && $submissions >= 5) {
-                $factors[] = get_string('factor_high_submissions', 'block_studentperformancepredictor');
-            }
-        }
-
-        // Add grade factor
-        if (isset($backend_data['features']['grade_average'])) {
-            $grade = (float)$backend_data['features']['grade_average'] * 100;
-            if ($risk_level == 3 && $grade < 50) {
-                $factors[] = get_string('factor_low_grades', 'block_studentperformancepredictor');
-            } else if ($risk_level == 2 && $grade < 70) {
-                $factors[] = get_string('factor_medium_grades', 'block_studentperformancepredictor');
-            } else if ($risk_level == 1 && $grade >= 75) {
-                $factors[] = get_string('factor_high_grades', 'block_studentperformancepredictor');
-            }
-        }
-
-        // Add login recency factor
-        if (isset($backend_data['features']['days_since_last_access'])) {
-            $days = (int)$backend_data['features']['days_since_last_access'];
-            if ($risk_level == 3 && $days > 7) {
-                $factors[] = get_string('factor_not_logged_in', 'block_studentperformancepredictor', $days);
-            } else if ($risk_level == 2 && $days > 3) {
-                $factors[] = get_string('factor_few_days_since_login', 'block_studentperformancepredictor', $days);
-            } else if ($risk_level == 1 && $days <= 1) {
-                $factors[] = get_string('factor_recent_login', 'block_studentperformancepredictor');
-            }
-        }
-
-        // Add modules accessed factor
-        if (isset($backend_data['features']['current_course_modules_accessed'])) {
-            $modules = (int)$backend_data['features']['current_course_modules_accessed'];
-            if ($risk_level == 3 && $modules < 3) {
-                $factors[] = get_string('factor_few_modules_accessed', 'block_studentperformancepredictor');
-            } else if ($risk_level == 2 && $modules < 6) {
-                $factors[] = get_string('factor_some_modules_accessed', 'block_studentperformancepredictor');
-            } else if ($risk_level == 1 && $modules >= 8) {
-                $factors[] = get_string('factor_many_modules_accessed', 'block_studentperformancepredictor');
-            }
-        }
-
-        // If no specific factors were identified, add a default message
         if (empty($factors)) {
             if ($risk_level == 3) {
                 $factors[] = get_string('factor_general_high_risk', 'block_studentperformancepredictor');
             } else if ($risk_level == 2) {
                 $factors[] = get_string('factor_general_medium_risk', 'block_studentperformancepredictor');
             } else {
-                $factors[] = get_string('factor_general_low_risk', 'block_studentperformancepredictor');
+                 $factors[] = get_string('factor_general_low_risk', 'block_studentperformancepredictor');
             }
         }
-
         return $factors;
-    }
-}
-
-<?php
-// blocks/studentperformancepredictor/classes/output/renderer.php
-
-namespace block_studentperformancepredictor\output;
-
-defined('MOODLE_INTERNAL') || die();
-
-use plugin_renderer_base;
-
-/**
- * Renderer for Student Performance Predictor block.
- */
-class renderer extends plugin_renderer_base {
-    /**
-     * Renders student_view.
-     *
-     * @param student_view $studentview The student view object
-     * @return string HTML
-     */
-    public function render_student_view(student_view $studentview) {
-        $data = $studentview->export_for_template($this);
-        return $this->render_from_template('block_studentperformancepredictor/student_dashboard', $data);
-    }
-
-    /**
-     * Renders teacher_view.
-     *
-     * @param teacher_view $teacherview The teacher view object
-     * @return string HTML
-     */
-    public function render_teacher_view(teacher_view $teacherview) {
-        $data = $teacherview->export_for_template($this);
-
-        // Initialize teacher dashboard JavaScript
-        $this->page->requires->js_call_amd('block_studentperformancepredictor/teacher_dashboard', 'init');
-
-        return $this->render_from_template('block_studentperformancepredictor/teacher_dashboard', $data);
-    }
-
-    /**
-     * Renders admin_view.
-     *
-     * @param admin_view $adminview The admin view object
-     * @return string HTML
-     */
-    public function render_admin_view(admin_view $adminview) {
-        $data = $adminview->export_for_template($this);
-
-        // Initialize admin dashboard JavaScript
-        $this->page->requires->js_call_amd('block_studentperformancepredictor/admin_dashboard', 'init');
-
-        // Initialize chart renderer for the admin view
-        $this->page->requires->js_call_amd('block_studentperformancepredictor/chart_renderer', 'initAdminChart');
-
-        return $this->render_from_template('block_studentperformancepredictor/admin_dashboard', $data);
     }
 }
 
@@ -6544,7 +4749,7 @@ class student_view implements \renderable, \templatable {
         $course = get_course($this->courseid);
         $data->coursename = format_string($course->fullname);
 
-        // Check if there's an active model - use global namespace function
+        // Check if there's an active model
         $data->hasmodel = \block_studentperformancepredictor_has_active_model($this->courseid);
 
         if (!$data->hasmodel) {
@@ -6552,13 +4757,13 @@ class student_view implements \renderable, \templatable {
             return $data;
         }
 
-        // Get student prediction - use global namespace function
+        // Get student prediction
         $prediction = \block_studentperformancepredictor_get_student_prediction($this->courseid, $this->userid);
 
-        // Add ability to generate new prediction
+        // **MODIFICATION**: The button now points to the new, secure student_refresh.php script.
         $data->can_generate_prediction = true;
-        $data->generate_prediction_url = new \moodle_url('/blocks/studentperformancepredictor/generate_prediction.php', 
-            ['courseid' => $this->courseid, 'userid' => $this->userid, 'sesskey' => sesskey()]);
+        $data->generate_prediction_url = new \moodle_url('/blocks/studentperformancepredictor/student_refresh.php');
+        $data->sesskey = sesskey();
 
         if (!$prediction) {
             $data->hasprediction = false;
@@ -6576,11 +4781,7 @@ class student_view implements \renderable, \templatable {
         $data->lastupdate = userdate($prediction->timemodified);
         $data->predictionid = $prediction->id;
 
-        // Check if this is from a global model
-        $model = $DB->get_record('block_spp_models', ['id' => $prediction->modelid]);
-        $data->isglobalmodel = ($model && $model->courseid == 0);
-
-        // Get suggestions - use global namespace function
+        // Get suggestions
         $suggestions = \block_studentperformancepredictor_get_suggestions($prediction->id);
 
         $data->hassuggestions = !empty($suggestions);
@@ -6590,67 +4791,19 @@ class student_view implements \renderable, \templatable {
             $suggestionData = new \stdClass();
             $suggestionData->id = $suggestion->id;
             $suggestionData->reason = $suggestion->reason;
-
-            // Create URL to the activity
             if (!empty($suggestion->cmid)) {
                 $suggestionData->hasurl = true;
-                $modulename = !empty($suggestion->modulename) ? $suggestion->modulename : '';
-                $cmname = !empty($suggestion->cmname) ? $suggestion->cmname : '';
-                $suggestionData->url = new \moodle_url('/mod/' . $modulename . '/view.php', 
-                                                    ['id' => $suggestion->cmid]);
-                $suggestionData->name = $cmname;
+                $suggestionData->url = new \moodle_url('/mod/' . $suggestion->modulename . '/view.php', ['id' => $suggestion->cmid]);
+                $suggestionData->name = $suggestion->cmname;
             } else {
                 $suggestionData->hasurl = false;
                 $suggestionData->name = get_string('generalstudy', 'block_studentperformancepredictor');
             }
-
             $suggestionData->viewed = $suggestion->viewed;
             $suggestionData->completed = $suggestion->completed;
-
             $data->suggestions[] = $suggestionData;
         }
-
-        // Create chart data
-        $data->haschart = true;
-        $chartData = [
-            'passprob' => $data->passprob,
-            'failprob' => 100 - $data->passprob
-        ];
-        $data->chartdata = json_encode($chartData);
-
-        // Add performance improvement tracking
-        $data->showimprovements = true;
-
-        // Get historical predictions for this student in this course
-        $sql = "SELECT p.*, m.algorithmtype 
-                FROM {block_spp_predictions} p
-                JOIN {block_spp_models} m ON p.modelid = m.id
-                WHERE p.courseid = :courseid 
-                AND p.userid = :userid
-                ORDER BY p.timemodified DESC
-                LIMIT 5";
-
-        $historical = $DB->get_records_sql($sql, [
-            'courseid' => $this->courseid,
-            'userid' => $this->userid
-        ]);
-
-        if (count($historical) > 1) {
-            $data->has_historical = true;
-            $data->historical = [];
-
-            foreach ($historical as $pred) {
-                $item = new \stdClass();
-                $item->date = userdate($pred->timemodified, get_string('strftimedateshort', 'langconfig'));
-                $item->passprob = round($pred->passprob * 100);
-                $item->risktext = \block_studentperformancepredictor_get_risk_text($pred->riskvalue);
-                $item->riskclass = \block_studentperformancepredictor_get_risk_class($pred->riskvalue);
-                $data->historical[] = $item;
-            }
-        } else {
-            $data->has_historical = false;
-        }
-
+        
         return $data;
     }
 }
@@ -6662,84 +4815,52 @@ namespace block_studentperformancepredictor\output;
 
 defined('MOODLE_INTERNAL') || die();
 
-// Add this line to include lib.php which contains the function definitions
 require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
 
-/**
- * Teacher view class for the teacher dashboard.
- *
- * This class prepares data for the teacher dashboard template.
- */
 class teacher_view implements \renderable, \templatable {
-    /** @var int Course ID */
     protected $courseid;
+    protected $showcourseselector;
+    protected $courseselectorhtml;
 
-    /**
-     * Constructor.
-     *
-     * @param int $courseid Course ID
-     */
-    public function __construct($courseid) {
+    public function __construct($courseid, $showcourseselector = false, $courseselectorhtml = '') {
         $this->courseid = $courseid;
+        $this->showcourseselector = $showcourseselector;
+        $this->courseselectorhtml = $courseselectorhtml;
     }
 
-    /**
-     * Export data for template.
-     *
-     * @param \renderer_base $output The renderer
-     * @return \stdClass Data for template
-     */
     public function export_for_template(\renderer_base $output) {
-        global $CFG, $DB, $USER;
+        global $DB;
 
         $data = new \stdClass();
-        $data->heading = get_string('courseperformance', 'block_studentperformancepredictor');
         $data->courseid = $this->courseid;
+        $data->showcourseselector = $this->showcourseselector;
+        $data->courseselectorhtml = $this->courseselectorhtml;
 
-        // Get course info
         $course = get_course($this->courseid);
         $data->coursename = format_string($course->fullname);
-        $data->courseshortname = format_string($course->shortname);
+        
+        $data->heading = $this->showcourseselector
+            ? get_string('pluginname', 'block_studentperformancepredictor')
+            : get_string('courseperformance', 'block_studentperformancepredictor');
 
-        // Get teacher's courses for selector
-        $teachercourses = [];
-        $courses = enrol_get_users_courses($USER->id);
-        foreach ($courses as $c) {
-            if ($c->id == SITEID) {
-                continue;
-            }
-            $context = \context_course::instance($c->id);
-            if (has_capability('block/studentperformancepredictor:viewallpredictions', $context)) {
-                $teachercourses[] = [
-                    'id' => $c->id,
-                    'name' => format_string($c->fullname),
-                    'shortname' => format_string($c->shortname),
-                    'selected' => ($c->id == $this->courseid)
-                ];
-            }
-        }
-
-        $data->has_multiple_courses = count($teachercourses) > 1;
-        $data->teachercourses = $teachercourses;
-
-        // Check if there's an active model - use global namespace function
         $data->hasmodel = \block_studentperformancepredictor_has_active_model($this->courseid);
 
+        $data->managemodelsurl = new \moodle_url('/blocks/studentperformancepredictor/admin/managemodels.php', ['courseid' => $this->courseid]);
+        $data->managedatasetsurl = new \moodle_url('/blocks/studentperformancepredictor/admin/managedatasets.php', ['courseid' => $this->courseid]);
+        $data->refreshpredictionsurl = new \moodle_url('/blocks/studentperformancepredictor/admin/refreshpredictions.php', ['courseid' => $this->courseid]);
+        
         if (!$data->hasmodel) {
             $data->nomodeltext = get_string('noactivemodel', 'block_studentperformancepredictor');
             return $data;
         }
 
-        // Get risk statistics - use global namespace function
         $riskStats = \block_studentperformancepredictor_get_course_risk_stats($this->courseid);
 
         $data->totalstudents = $riskStats->total;
         $data->highrisk = $riskStats->highrisk;
         $data->mediumrisk = $riskStats->mediumrisk;
         $data->lowrisk = $riskStats->lowrisk;
-        $data->missing_predictions = $riskStats->missing ?? 0;
 
-        // Calculate percentages
         if ($data->totalstudents > 0) {
             $data->highriskpercent = round(($data->highrisk / $data->totalstudents) * 100);
             $data->mediumriskpercent = round(($data->mediumrisk / $data->totalstudents) * 100);
@@ -6750,384 +4871,5202 @@ class teacher_view implements \renderable, \templatable {
             $data->lowriskpercent = 0;
         }
 
-        // Get the last refresh time
-        $lastrefresh = get_config('block_studentperformancepredictor', 'lastrefresh_' . $this->courseid);
-        $data->has_lastrefresh = !empty($lastrefresh);
-        if ($data->has_lastrefresh) {
-            $data->lastrefresh = userdate($lastrefresh);
-            $data->lastrefresh_ago = format_time(time() - $lastrefresh);
-        }
-
-        // Get students with predictions in this course, grouped by risk level
         $data->students_highrisk = $this->get_students_by_risk_level(3);
         $data->students_mediumrisk = $this->get_students_by_risk_level(2);
         $data->students_lowrisk = $this->get_students_by_risk_level(1);
 
-        // Get students with no predictions
-        $data->students_missing = $this->get_students_without_predictions();
-
-        // Check if we have students in each category
         $data->has_highrisk_students = !empty($data->students_highrisk);
         $data->has_mediumrisk_students = !empty($data->students_mediumrisk);
         $data->has_lowrisk_students = !empty($data->students_lowrisk);
-        $data->has_missing_predictions = !empty($data->students_missing);
-
-        // Create URL to detailed report
-        $data->detailreporturl = new \moodle_url('/blocks/studentperformancepredictor/reports.php', 
-                                              ['courseid' => $this->courseid]);
-
-        // Create URL for refreshing predictions
-        $data->refreshpredictionsurl = new \moodle_url('/blocks/studentperformancepredictor/admin/refreshpredictions.php', 
-                                              ['courseid' => $this->courseid]);
-
-        // Create chart data
-        $data->haschart = true;
-        $chartData = [
-            'labels' => [
-                get_string('highrisk_label', 'block_studentperformancepredictor'),
-                get_string('mediumrisk_label', 'block_studentperformancepredictor'),
-                get_string('lowrisk_label', 'block_studentperformancepredictor')
-            ],
-            'data' => [$data->highrisk, $data->mediumrisk, $data->lowrisk]
-        ];
-        $data->chartdata = json_encode($chartData);
 
         return $data;
     }
 
-    /**
-     * Get students by risk level with prediction details.
-     *
-     * @param int $risk_level Risk level (1=low, 2=medium, 3=high)
-     * @return array Students with this risk level
-     */
     protected function get_students_by_risk_level($risk_level) {
         global $DB, $PAGE;
 
-        $sql = "SELECT p.*, u.id as userid, u.firstname, u.lastname, u.email, u.picture, u.imagealt, 
-                       u.firstnamephonetic, u.lastnamephonetic, u.middlename, u.alternatename,
-                       m.courseid as modelcourseid, m.id as modelid
+        $sql = "SELECT p.id AS predictionid, p.passprob, p.predictiondata, u.*
                 FROM {block_spp_predictions} p
                 JOIN {user} u ON p.userid = u.id
                 JOIN {block_spp_models} m ON p.modelid = m.id
-                WHERE p.courseid = :courseid 
-                AND p.riskvalue = :risklevel
-                AND m.active = 1
+                JOIN (
+                    SELECT userid, MAX(timemodified) AS maxtime
+                    FROM {block_spp_predictions}
+                    WHERE courseid = :courseid
+                    GROUP BY userid
+                ) AS latest_p ON p.userid = latest_p.userid AND p.timemodified = latest_p.maxtime
+                WHERE p.courseid = :courseid2
+                  AND p.riskvalue = :risklevel
+                  AND m.active = 1
                 ORDER BY u.lastname, u.firstname";
 
-        $params = [
-            'courseid' => $this->courseid,
-            'risklevel' => $risk_level
-        ];
-
+        $params = ['courseid' => $this->courseid, 'courseid2' => $this->courseid, 'risklevel' => $risk_level];
         $records = $DB->get_records_sql($sql, $params);
         $students = [];
 
         foreach ($records as $record) {
-            // Get prediction details
-            $prediction_data = json_decode($record->predictiondata, true);
-
-            // Extract risk factors from prediction data
-            $risk_factors = $this->extract_risk_factors($prediction_data, $risk_level);
-
-            // Get user picture URL
             $user_picture = new \user_picture($record);
-            $user_picture->size = 35; // Size in pixels
+            $user_picture->size = 35;
 
-            // Create student object
-            $student = new \stdClass();
-            $student->id = $record->userid;
-            $student->fullname = fullname($record);
-            $student->picture = $user_picture->get_url($PAGE)->out(false);
-            $student->passprob = round($record->passprob * 100);
-            $student->profileurl = new \moodle_url('/user/view.php', 
-                                                 ['id' => $record->userid, 'course' => $this->courseid]);
-            $student->risk_factors = $risk_factors;
-            $student->prediction_id = $record->id;
-            $student->generate_url = new \moodle_url('/blocks/studentperformancepredictor/generate_prediction.php', 
-                                                   ['courseid' => $this->courseid, 
-                                                    'userid' => $record->userid, 
-                                                    'sesskey' => sesskey()]);
-
-            // Flag if this is from a global model
-            $student->isglobalmodel = ($record->modelcourseid == 0);
-
-            // Get incomplete activities
-            $student->incomplete_activities = $this->get_student_incomplete_activities($record->userid);
-            $student->has_incomplete_activities = !empty($student->incomplete_activities);
-
-            // Get grade information
-            $student->grade = $this->get_student_course_grade($record->userid);
-
-            // Get last access information
-            $student->lastaccess = $this->get_student_last_access($record->userid);
-
-            $students[] = $student;
-        }
-
-        return $students;
-    }
-
-    /**
-     * Get students without predictions
-     * 
-     * @return array Students without predictions
-     */
-    protected function get_students_without_predictions() {
-        global $DB, $PAGE;
-
-        $sql = "SELECT DISTINCT u.id, u.firstname, u.lastname, u.email, u.picture, u.imagealt, 
-                       u.firstnamephonetic, u.lastnamephonetic, u.middlename, u.alternatename
-                FROM {user} u
-                JOIN {user_enrolments} ue ON ue.userid = u.id
-                JOIN {enrol} e ON e.id = ue.enrolid
-                LEFT JOIN {block_spp_predictions} p ON p.userid = u.id AND p.courseid = :courseid
-                WHERE e.courseid = :courseid2
-                AND p.id IS NULL
-                ORDER BY u.lastname, u.firstname";
-
-        $params = [
-            'courseid' => $this->courseid,
-            'courseid2' => $this->courseid
-        ];
-
-        $records = $DB->get_records_sql($sql, $params);
-        $students = [];
-
-        foreach ($records as $record) {
-            // Get user picture URL
-            $user_picture = new \user_picture($record);
-            $user_picture->size = 35; // Size in pixels
-
-            // Create student object
             $student = new \stdClass();
             $student->id = $record->id;
             $student->fullname = fullname($record);
             $student->picture = $user_picture->get_url($PAGE)->out(false);
-            $student->profileurl = new \moodle_url('/user/view.php', 
-                                                 ['id' => $record->id, 'course' => $this->courseid]);
-            $student->generate_url = new \moodle_url('/blocks/studentperformancepredictor/generate_prediction.php', 
-                                                   ['courseid' => $this->courseid, 
-                                                    'userid' => $record->id, 
-                                                    'sesskey' => sesskey()]);
+            $student->passprob = round($record->passprob * 100);
+            $student->profileurl = new \moodle_url('/user/view.php', ['id' => $record->id, 'course' => $this->courseid]);
+            $student->generate_url = new \moodle_url('/blocks/studentperformancepredictor/generate_prediction.php',
+                                                   ['courseid' => $this->courseid, 'userid' => $record->id, 'sesskey' => sesskey()]);
+            
+            $prediction_data = json_decode($record->predictiondata, true);
+            $student->risk_factors = $this->extract_risk_factors($prediction_data, $risk_level);
 
-            // Get incomplete activities
-            $student->incomplete_activities = $this->get_student_incomplete_activities($record->id);
-            $student->has_incomplete_activities = !empty($student->incomplete_activities);
-
-            // Get grade information
-            $student->grade = $this->get_student_course_grade($record->id);
-
-            // Get last access information
-            $student->lastaccess = $this->get_student_last_access($record->id);
+            $suggestions = \block_studentperformancepredictor_get_suggestions($record->predictionid);
+            $student->suggestions = [];
+            if (!empty($suggestions)) {
+                foreach (array_slice($suggestions, 0, 2) as $suggestion) { // Limit to 2 for a "short version"
+                    $suggestion_text = $suggestion->cmname;
+                    if (isset($suggestion->reason) && !empty($suggestion->reason)) {
+                        $suggestion_text .= ': ' . substr($suggestion->reason, 0, 50) . (strlen($suggestion->reason) > 50 ? '...' : '');
+                    }
+                    $student->suggestions[] = (object)['text' => $suggestion_text];
+                }
+            }
 
             $students[] = $student;
         }
-
         return $students;
     }
-
-    /**
-     * Get student incomplete activities
-     * 
-     * @param int $userid User ID
-     * @return array Incomplete activities
-     */
-    protected function get_student_incomplete_activities($userid) {
-        global $DB;
-
-        $course = get_course($this->courseid);
-        $modinfo = get_fast_modinfo($course, $userid);
-        $completion = new \completion_info($course);
-        $activities = [];
-
-        foreach ($modinfo->get_cms() as $cm) {
-            if (!$cm->uservisible || $cm->modname == 'label') {
-                continue;
-            }
-
-            if ($completion->is_enabled($cm)) {
-                $data = $completion->get_data($cm, false, $userid);
-                if ($data->completionstate != COMPLETION_COMPLETE && $data->completionstate != COMPLETION_COMPLETE_PASS) {
-                    $activities[] = [
-                        'name' => $cm->name,
-                        'url' => $cm->url->out(false),
-                        'modname' => $cm->modname,
-                        'icon' => $cm->get_icon_url()->out(false)
-                    ];
-                }
-            }
-        }
-
-        return $activities;
-    }
-
-    /**
-     * Get student course grade
-     * 
-     * @param int $userid User ID
-     * @return object Grade information
-     */
-    protected function get_student_course_grade($userid) {
-        global $DB;
-
-        $result = new \stdClass();
-        $result->grade = null;
-        $result->grademax = 100;
-        $result->percentage = 0;
-        $result->hasgrades = false;
-
-        // Get course grade
-        $grade = grade_get_course_grade($userid, $this->courseid);
-        if ($grade && isset($grade->grade) && $grade->grade !== null) {
-            $result->grade = $grade->grade;
-            $result->grademax = $grade->grade_item->grademax;
-            $result->percentage = ($grade->grade / $grade->grade_item->grademax) * 100;
-            $result->hasgrades = true;
-
-            // Determine grade class based on percentage
-            if ($result->percentage >= 70) {
-                $result->gradeclass = 'text-success';
-            } else if ($result->percentage >= 50) {
-                $result->gradeclass = 'text-warning';
-            } else {
-                $result->gradeclass = 'text-danger';
-            }
-        }
-
-        return $result;
-    }
-
-    /**
-     * Get student last access
-     * 
-     * @param int $userid User ID
-     * @return object Last access information
-     */
-    protected function get_student_last_access($userid) {
-        global $DB;
-
-        $result = new \stdClass();
-        $result->timestamp = 0;
-        $result->timeago = '';
-        $result->hasaccess = false;
-
-        // Get last course access
-        $lastaccess = $DB->get_record('user_lastaccess', [
-            'userid' => $userid,
-            'courseid' => $this->courseid
-        ]);
-
-        if ($lastaccess) {
-            $result->timestamp = $lastaccess->timeaccess;
-            $result->timeago = format_time(time() - $lastaccess->timeaccess);
-            $result->hasaccess = true;
-
-            // Determine access class based on time
-            $dayspassed = (time() - $lastaccess->timeaccess) / (60 * 60 * 24);
-            if ($dayspassed <= 3) {
-                $result->accessclass = 'text-success';
-            } else if ($dayspassed <= 7) {
-                $result->accessclass = 'text-warning';
-            } else {
-                $result->accessclass = 'text-danger';
-            }
-        }
-
-        return $result;
-    }
-
-    /**
-     * Extract risk factors from prediction data.
-     *
-     * @param array $prediction_data Prediction data from backend
-     * @param int $risk_level Risk level (1=low, 2=medium, 3=high)
-     * @return array Risk factors
-     */
+    
     protected function extract_risk_factors($prediction_data, $risk_level) {
         $factors = [];
-
-        // Check if we have backend data
-        if (empty($prediction_data) || empty($prediction_data['backend'])) {
+        // This is the corrected access path.
+        if (empty($prediction_data) || !isset($prediction_data['features'])) {
             return [get_string('nofactorsavailable', 'block_studentperformancepredictor')];
         }
+        $features = $prediction_data['features'];
 
-        $backend_data = $prediction_data['backend'];
-
-        // Add activity level factor
-        if (isset($backend_data['features']['activity_level'])) {
-            $activity = (int)$backend_data['features']['activity_level'];
-            if ($risk_level == 3 && $activity < 5) {
-                $factors[] = get_string('factor_low_activity', 'block_studentperformancepredictor');
-            } else if ($risk_level == 2 && $activity < 10) {
-                $factors[] = get_string('factor_medium_activity', 'block_studentperformancepredictor');
-            } else if ($risk_level == 1 && $activity >= 15) {
-                $factors[] = get_string('factor_high_activity', 'block_studentperformancepredictor');
-            }
+        if (isset($features['activity_level']) && $features['activity_level'] < 5 && $risk_level >= 2) {
+            $factors[] = get_string('factor_low_activity', 'block_studentperformancepredictor');
+        }
+        if (isset($features['submission_count']) && $features['submission_count'] < 2 && $risk_level >= 2) {
+            $factors[] = get_string('factor_low_submissions', 'block_studentperformancepredictor');
+        }
+        if (isset($features['current_grade_percentage']) && $features['current_grade_percentage'] < 50 && $risk_level == 3) {
+            $factors[] = get_string('factor_low_grades', 'block_studentperformancepredictor');
+        }
+        if (isset($features['days_since_last_access']) && $features['days_since_last_access'] > 7 && $risk_level == 3) {
+            $factors[] = get_string('factor_not_logged_in', 'block_studentperformancepredictor', (int)$features['days_since_last_access']);
         }
 
-        // Add submission factor
-        if (isset($backend_data['features']['submission_count'])) {
-            $submissions = (int)$backend_data['features']['submission_count'];
-            if ($risk_level == 3 && $submissions < 2) {
-                $factors[] = get_string('factor_low_submissions', 'block_studentperformancepredictor');
-            } else if ($risk_level == 2 && $submissions < 4) {
-                $factors[] = get_string('factor_medium_submissions', 'block_studentperformancepredictor');
-            } else if ($risk_level == 1 && $submissions >= 5) {
-                $factors[] = get_string('factor_high_submissions', 'block_studentperformancepredictor');
-            }
-        }
-
-        // Add grade factor
-        if (isset($backend_data['features']['grade_average'])) {
-            $grade = (float)$backend_data['features']['grade_average'] * 100;
-            if ($risk_level == 3 && $grade < 50) {
-                $factors[] = get_string('factor_low_grades', 'block_studentperformancepredictor');
-            } else if ($risk_level == 2 && $grade < 70) {
-                $factors[] = get_string('factor_medium_grades', 'block_studentperformancepredictor');
-            } else if ($risk_level == 1 && $grade >= 75) {
-                $factors[] = get_string('factor_high_grades', 'block_studentperformancepredictor');
-            }
-        }
-
-        // Add login recency factor
-        if (isset($backend_data['features']['days_since_last_access'])) {
-            $days = (int)$backend_data['features']['days_since_last_access'];
-            if ($risk_level == 3 && $days > 7) {
-                $factors[] = get_string('factor_not_logged_in', 'block_studentperformancepredictor', $days);
-            } else if ($risk_level == 2 && $days > 3) {
-                $factors[] = get_string('factor_few_days_since_login', 'block_studentperformancepredictor', $days);
-            } else if ($risk_level == 1 && $days <= 1) {
-                $factors[] = get_string('factor_recent_login', 'block_studentperformancepredictor');
-            }
-        }
-
-        // Add modules accessed factor
-        if (isset($backend_data['features']['current_course_modules_accessed'])) {
-            $modules = (int)$backend_data['features']['current_course_modules_accessed'];
-            if ($risk_level == 3 && $modules < 3) {
-                $factors[] = get_string('factor_few_modules_accessed', 'block_studentperformancepredictor');
-            } else if ($risk_level == 2 && $modules < 6) {
-                $factors[] = get_string('factor_some_modules_accessed', 'block_studentperformancepredictor');
-            } else if ($risk_level == 1 && $modules >= 8) {
-                $factors[] = get_string('factor_many_modules_accessed', 'block_studentperformancepredictor');
-            }
-        }
-
-        // If no specific factors were identified, add a default message
         if (empty($factors)) {
             if ($risk_level == 3) {
                 $factors[] = get_string('factor_general_high_risk', 'block_studentperformancepredictor');
             } else if ($risk_level == 2) {
                 $factors[] = get_string('factor_general_medium_risk', 'block_studentperformancepredictor');
             } else {
-                $factors[] = get_string('factor_general_low_risk', 'block_studentperformancepredictor');
+                 $factors[] = get_string('factor_general_low_risk', 'block_studentperformancepredictor');
             }
         }
-
         return $factors;
     }
 }
+
+<?php
+// blocks/studentperformancepredictor/classes/privacy/provider.php
+
+namespace block_studentperformancepredictor\privacy;
+
+defined('MOODLE_INTERNAL') || die();
+
+use core_privacy\local\metadata\collection;
+use core_privacy\local\request\approved_contextlist;
+use core_privacy\local\request\approved_userlist;
+use core_privacy\local\request\contextlist;
+use core_privacy\local\request\deletion_criteria;
+use core_privacy\local\request\helper;
+use core_privacy\local\request\userlist;
+use core_privacy\local\request\writer;
+use core_privacy\local\request\transform;
+use context_course;
+use context;
+use const CONTEXT_COURSE;
+use const SQL_PARAMS_NAMED;
+
+/**
+ * Privacy API implementation for the Student Performance Predictor plugin.
+ *
+ * All user data (predictions, suggestions) is orchestrated by PHP but generated by the Python backend.
+ * This provider ensures GDPR compliance for all backend-driven data.
+ *
+ * @package    block_studentperformancepredictor
+ * @copyright  2023 Your Name <[Email]>
+ * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+class provider implements
+    \core_privacy\local\metadata\provider,
+    \core_privacy\local\request\plugin\provider,
+    \core_privacy\local\request\core_userlist_provider {
+
+    /**
+     * Returns metadata about this plugin's privacy usage.
+     *
+     * All fields are orchestrated by PHP but generated by the Python backend.
+     *
+     * @param collection $collection The metadata collection to populate.
+     * @return collection The updated metadata collection.
+     */
+    public static function get_metadata(collection $collection): collection {
+        $collection->add_database_table(
+            'block_spp_predictions',
+            [
+                'modelid' => 'privacy:metadata:block_spp_predictions:modelid',
+                'courseid' => 'privacy:metadata:block_spp_predictions:courseid',
+                'userid' => 'privacy:metadata:block_spp_predictions:userid',
+                'passprob' => 'privacy:metadata:block_spp_predictions:passprob',
+                'riskvalue' => 'privacy:metadata:block_spp_predictions:riskvalue',
+                'predictiondata' => 'privacy:metadata:block_spp_predictions:predictiondata',
+                'timecreated' => 'privacy:metadata:block_spp_predictions:timecreated',
+                'timemodified' => 'privacy:metadata:block_spp_predictions:timemodified',
+            ],
+            'privacy:metadata:block_spp_predictions'
+        );
+
+        $collection->add_database_table(
+            'block_spp_suggestions',
+            [
+                'predictionid' => 'privacy:metadata:block_spp_suggestions:predictionid',
+                'courseid' => 'privacy:metadata:block_spp_suggestions:courseid',
+                'userid' => 'privacy:metadata:block_spp_suggestions:userid',
+                'cmid' => 'privacy:metadata:block_spp_suggestions:cmid',
+                'resourcetype' => 'privacy:metadata:block_spp_suggestions:resourcetype',
+                'resourceid' => 'privacy:metadata:block_spp_suggestions:resourceid',
+                'priority' => 'privacy:metadata:block_spp_suggestions:priority',
+                'reason' => 'privacy:metadata:block_spp_suggestions:reason',
+                'timecreated' => 'privacy:metadata:block_spp_suggestions:timecreated',
+                'viewed' => 'privacy:metadata:block_spp_suggestions:viewed',
+                'completed' => 'privacy:metadata:block_spp_suggestions:completed',
+            ],
+            'privacy:metadata:block_spp_suggestions'
+        );
+
+        return $collection;
+    }
+
+    /**
+     * Get the list of contexts that contain user information for the specified user.
+     *
+     * @param int $userid The user to search.
+     * @return contextlist The contextlist containing the list of contexts used in this plugin.
+     */
+    public static function get_contexts_for_userid(int $userid): contextlist {
+        $contextlist = new contextlist();
+
+        // Add course contexts where the user has predictions or suggestions (all backend-driven).
+        $sql = "
+            SELECT DISTINCT ctx.id
+            FROM {context} ctx
+            JOIN {course} c ON c.id = ctx.instanceid AND ctx.contextlevel = :contextlevel
+            JOIN {block_spp_predictions} p ON p.courseid = c.id
+            WHERE p.userid = :userid
+        ";
+        $params = [
+            'contextlevel' => CONTEXT_COURSE,
+            'userid' => $userid
+        ];
+        $contextlist->add_from_sql($sql, $params);
+
+        $sql = "
+            SELECT DISTINCT ctx.id
+            FROM {context} ctx
+            JOIN {course} c ON c.id = ctx.instanceid AND ctx.contextlevel = :contextlevel
+            JOIN {block_spp_suggestions} s ON s.courseid = c.id
+            WHERE s.userid = :userid
+        ";
+        $contextlist->add_from_sql($sql, $params);
+
+        return $contextlist;
+    }
+
+    /**
+     * Get the list of users who have data within a context.
+     *
+     * @param userlist $userlist The userlist containing the list of users who have data in this context/plugin combination.
+     */
+    public static function get_users_in_context(userlist $userlist) {
+        $context = $userlist->get_context();
+        if (!$context instanceof \context_course) {
+            return;
+        }
+        $params = [
+            'courseid' => $context->instanceid,
+        ];
+        // Add users who have predictions or suggestions in this course (all backend-driven).
+        $sql = "SELECT userid FROM {block_spp_predictions} WHERE courseid = :courseid";
+        $userlist->add_from_sql('userid', $sql, $params);
+        $sql = "SELECT userid FROM {block_spp_suggestions} WHERE courseid = :courseid";
+        $userlist->add_from_sql('userid', $sql, $params);
+    }
+
+    /**
+     * Export all user data for the specified user, in the specified contexts.
+     *
+     * @param approved_contextlist $contextlist The approved contexts to export information for.
+     */
+    public static function export_user_data(approved_contextlist $contextlist) {
+        global $DB;
+        if (empty($contextlist->count())) {
+            return;
+        }
+        $user = $contextlist->get_user();
+        foreach ($contextlist->get_contexts() as $context) {
+            if (!$context instanceof \context_course) {
+                continue;
+            }
+            $courseid = $context->instanceid;
+            // Export predictions (all backend-driven).
+            $predictions = $DB->get_records('block_spp_predictions', ['courseid' => $courseid, 'userid' => $user->id]);
+            foreach ($predictions as $prediction) {
+                $predictiondata = [
+                    'passprob' => $prediction->passprob,
+                    'riskvalue' => $prediction->riskvalue,
+                    'predictiondata' => $prediction->predictiondata,
+                    'timecreated' => transform::datetime($prediction->timecreated),
+                    'timemodified' => transform::datetime($prediction->timemodified),
+                ];
+                writer::with_context($context)->export_data(
+                    [\get_string('privacy:predictionpath', 'block_studentperformancepredictor', $prediction->id)],
+                    (object) $predictiondata
+                );
+                // Export associated suggestions (all backend-driven).
+                $suggestions = $DB->get_records('block_spp_suggestions', ['predictionid' => $prediction->id, 'userid' => $user->id]);
+                foreach ($suggestions as $suggestion) {
+                    $suggestiondata = [
+                        'resourcetype' => $suggestion->resourcetype,
+                        'priority' => $suggestion->priority,
+                        'reason' => $suggestion->reason,
+                        'timecreated' => transform::datetime($suggestion->timecreated),
+                        'viewed' => $suggestion->viewed,
+                        'completed' => $suggestion->completed,
+                    ];
+                    writer::with_context($context)->export_data(
+                        [
+                            \get_string('privacy:predictionpath', 'block_studentperformancepredictor', $prediction->id),
+                            \get_string('privacy:suggestionpath', 'block_studentperformancepredictor', $suggestion->id)
+                        ],
+                        (object) $suggestiondata
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * Delete all data for all users in the specified context.
+     *
+     * @param \context $context The specific context to delete data for.
+     */
+    public static function delete_data_for_all_users_in_context(\context $context) {
+        global $DB;
+        if (!$context instanceof \context_course) {
+            return;
+        }
+        $courseid = $context->instanceid;
+        // Delete all suggestions for the course (all backend-driven).
+        $DB->delete_records('block_spp_suggestions', ['courseid' => $courseid]);
+        // Get all predictions for the course.
+        $predictions = $DB->get_records('block_spp_predictions', ['courseid' => $courseid], '', 'id');
+        if (!empty($predictions)) {
+            // Delete all suggestions associated with these predictions (should already be covered by the above, but just in case).
+            list($insql, $inparams) = $DB->get_in_or_equal(array_keys($predictions), SQL_PARAMS_NAMED);
+            $DB->delete_records_select('block_spp_suggestions', "predictionid $insql", $inparams);
+            // Now delete the predictions.
+            $DB->delete_records('block_spp_predictions', ['courseid' => $courseid]);
+        }
+    }
+
+    /**
+     * Delete all user data for the specified user, in the specified contexts.
+     *
+     * @param approved_contextlist $contextlist The approved contexts and user information to delete information for.
+     */
+    public static function delete_data_for_user(approved_contextlist $contextlist) {
+        global $DB;
+        if (empty($contextlist->count())) {
+            return;
+        }
+        $user = $contextlist->get_user();
+        foreach ($contextlist->get_contexts() as $context) {
+            if (!$context instanceof \context_course) {
+                continue;
+            }
+            $courseid = $context->instanceid;
+            // Delete suggestions for the user in this course (all backend-driven).
+            $DB->delete_records('block_spp_suggestions', ['courseid' => $courseid, 'userid' => $user->id]);
+            // Get predictions for the user in this course.
+            $predictions = $DB->get_records('block_spp_predictions', ['courseid' => $courseid, 'userid' => $user->id], '', 'id');
+            if (!empty($predictions)) {
+                // Delete suggestions associated with these predictions (should already be covered by the above, but just in case).
+                list($insql, $inparams) = $DB->get_in_or_equal(array_keys($predictions), SQL_PARAMS_NAMED);
+                $DB->delete_records_select('block_spp_suggestions', "predictionid $insql", $inparams);
+                // Now delete the predictions.
+                $DB->delete_records('block_spp_predictions', ['courseid' => $courseid, 'userid' => $user->id]);
+            }
+        }
+    }
+
+    /**
+     * Delete multiple users within a single context.
+     *
+     * @param approved_userlist $userlist The approved context and user information to delete information for.
+     */
+    public static function delete_data_for_users(approved_userlist $userlist) {
+        global $DB;
+        $context = $userlist->get_context();
+        if (!$context instanceof \context_course) {
+            return;
+        }
+        $courseid = $context->instanceid;
+        $userids = $userlist->get_userids();
+        if (empty($userids)) {
+            return;
+        }
+        // Delete suggestions for these users in this course (all backend-driven).
+        list($insql, $inparams) = $DB->get_in_or_equal($userids, SQL_PARAMS_NAMED);
+        $inparams['courseid'] = $courseid;
+        $DB->delete_records_select(
+            'block_spp_suggestions',
+            "courseid = :courseid AND userid $insql",
+            $inparams
+        );
+        // Get predictions for these users in this course.
+        $predictions = $DB->get_records_select(
+            'block_spp_predictions',
+            "courseid = :courseid AND userid $insql",
+            $inparams,
+            '',
+            'id'
+        );
+        if (!empty($predictions)) {
+            // Delete suggestions associated with these predictions (should already be covered by the above, but just in case).
+            list($predinsql, $predinparams) = $DB->get_in_or_equal(array_keys($predictions), SQL_PARAMS_NAMED);
+            $DB->delete_records_select('block_spp_suggestions', "predictionid $predinsql", $predinparams);
+            // Now delete the predictions.
+            $DB->delete_records_select(
+                'block_spp_predictions',
+                "courseid = :courseid AND userid $insql",
+                $inparams
+            );
+        }
+    }
+}
+
+<?php
+// blocks/studentperformancepredictor/classes/task/adhoc_prediction_refresh.php
+
+namespace block_studentperformancepredictor\task;
+
+defined('MOODLE_INTERNAL') || die();
+require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
+
+/**
+ * Adhoc task for refreshing predictions based on user requests
+ */
+class adhoc_prediction_refresh extends \core\task\adhoc_task {
+    /**
+     * Execute the task
+     */
+    public function execute() {
+        global $DB;
+
+        // Get task data
+        $data = $this->get_custom_data();
+
+        // Get required parameters
+        $courseid = $data->courseid ?? 0;
+        $userid = $data->userid ?? 0; // For individual student prediction
+        $requestor = $data->requestor ?? 0; // User who requested the prediction
+        $context = null;
+
+        if (!$courseid) {
+            mtrace("Error: Missing courseid parameter for prediction task");
+            return;
+        }
+
+        try {
+            $context = \context_course::instance($courseid);
+            mtrace("Processing prediction request for course $courseid");
+
+            // Check if we're generating for a specific user or all students
+            if (!empty($userid)) {
+                mtrace("Generating prediction for specific student ID: $userid");
+
+                // Generate prediction for just this student
+                $prediction = block_studentperformancepredictor_generate_prediction($courseid, $userid);
+
+                if ($prediction) {
+                    mtrace("Successfully generated prediction for student $userid");
+
+                    // Send notification to the requesting user if they're different from the student
+                    if ($requestor && $requestor != $userid) {
+                        $this->send_prediction_notification($requestor, $userid, $courseid, true);
+                    }
+                } else {
+                    mtrace("Failed to generate prediction for student $userid");
+                    if ($requestor) {
+                        $this->send_prediction_notification($requestor, $userid, $courseid, false);
+                    }
+                }
+            } else {
+                // Generate predictions for all students in the course
+                mtrace("Generating predictions for all students in course $courseid");
+
+                // Get all enrolled students
+                $students = get_enrolled_users($context, 'moodle/course:isincompletionreports');
+                mtrace("Found " . count($students) . " enrolled students");
+
+                $success = 0;
+                $failed = 0;
+
+                foreach ($students as $student) {
+                    try {
+                        mtrace("Processing student ID: " . $student->id);
+                        $prediction = block_studentperformancepredictor_generate_prediction($courseid, $student->id);
+                        if ($prediction) {
+                            $success++;
+                        } else {
+                            $failed++;
+                        }
+                    } catch (\Exception $e) {
+                        mtrace("Error generating prediction for student " . $student->id . ": " . $e->getMessage());
+                        $failed++;
+                    }
+                }
+
+                mtrace("Completed: $success successful, $failed failed");
+
+                // Update the last refresh time
+                set_config('lastrefresh_' . $courseid, time(), 'block_studentperformancepredictor');
+
+                // Send notification to the requestor
+                if ($requestor) {
+                    $this->send_batch_completion_notification($requestor, $courseid, $success, $failed);
+                }
+            }
+        } catch (\Exception $e) {
+            mtrace("Error in prediction task: " . $e->getMessage());
+            if ($requestor) {
+                $this->send_error_notification($requestor, $courseid, $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Send notification about a single prediction
+     */
+    protected function send_prediction_notification($requestorid, $studentid, $courseid, $success) {
+        global $DB;
+
+        $requestor = $DB->get_record('user', ['id' => $requestorid]);
+        $student = $DB->get_record('user', ['id' => $studentid]);
+        $course = $DB->get_record('course', ['id' => $courseid]);
+
+        if (!$requestor || !$student || !$course) {
+            return;
+        }
+
+        $subject = get_string('prediction_notification_subject', 'block_studentperformancepredictor');
+
+        $messagedata = new \stdClass();
+        $messagedata->studentname = fullname($student);
+        $messagedata->coursename = format_string($course->fullname);
+
+        if ($success) {
+            $message = get_string('prediction_success_message', 'block_studentperformancepredictor', $messagedata);
+        } else {
+            $message = get_string('prediction_failed_message', 'block_studentperformancepredictor', $messagedata);
+        }
+
+        $eventdata = new \core\message\message();
+        $eventdata->courseid = $courseid;
+        $eventdata->component = 'block_studentperformancepredictor';
+        $eventdata->name = 'prediction_notification';
+        $eventdata->userfrom = \core_user::get_noreply_user();
+        $eventdata->userto = $requestor;
+        $eventdata->subject = $subject;
+        $eventdata->fullmessage = $message;
+        $eventdata->fullmessageformat = FORMAT_HTML;
+        $eventdata->fullmessagehtml = $message;
+        $eventdata->smallmessage = $subject;
+        $eventdata->notification = 1;
+
+        message_send($eventdata);
+    }
+
+    /**
+     * Send notification about batch completion
+     */
+    protected function send_batch_completion_notification($requestorid, $courseid, $success, $failed) {
+        global $DB;
+
+        $requestor = $DB->get_record('user', ['id' => $requestorid]);
+        $course = $DB->get_record('course', ['id' => $courseid]);
+
+        if (!$requestor || !$course) {
+            return;
+        }
+
+        $subject = get_string('prediction_batch_subject', 'block_studentperformancepredictor');
+
+        $messagedata = new \stdClass();
+        $messagedata->coursename = format_string($course->fullname);
+        $messagedata->success = $success;
+        $messagedata->failed = $failed;
+        $messagedata->total = $success + $failed;
+
+        $message = get_string('prediction_batch_message', 'block_studentperformancepredictor', $messagedata);
+
+        $eventdata = new \core\message\message();
+        $eventdata->courseid = $courseid;
+        $eventdata->component = 'block_studentperformancepredictor';
+        $eventdata->name = 'prediction_batch_notification';
+        $eventdata->userfrom = \core_user::get_noreply_user();
+        $eventdata->userto = $requestor;
+        $eventdata->subject = $subject;
+        $eventdata->fullmessage = $message;
+        $eventdata->fullmessageformat = FORMAT_HTML;
+        $eventdata->fullmessagehtml = $message;
+        $eventdata->smallmessage = $subject;
+        $eventdata->notification = 1;
+
+        message_send($eventdata);
+    }
+
+    /**
+     * Send error notification
+     */
+    protected function send_error_notification($requestorid, $courseid, $error) {
+        global $DB;
+
+        $requestor = $DB->get_record('user', ['id' => $requestorid]);
+        $course = $DB->get_record('course', ['id' => $courseid]);
+
+        if (!$requestor || !$course) {
+            return;
+        }
+
+        $subject = get_string('prediction_error_subject', 'block_studentperformancepredictor');
+
+        $messagedata = new \stdClass();
+        $messagedata->coursename = format_string($course->fullname);
+        $messagedata->error = $error;
+
+        $message = get_string('prediction_error_message', 'block_studentperformancepredictor', $messagedata);
+
+        $eventdata = new \core\message\message();
+        $eventdata->courseid = $courseid;
+        $eventdata->component = 'block_studentperformancepredictor';
+        $eventdata->name = 'prediction_error_notification';
+        $eventdata->userfrom = \core_user::get_noreply_user();
+        $eventdata->userto = $requestor;
+        $eventdata->subject = $subject;
+        $eventdata->fullmessage = $message;
+        $eventdata->fullmessageformat = FORMAT_HTML;
+        $eventdata->fullmessagehtml = $message;
+        $eventdata->smallmessage = $subject;
+        $eventdata->notification = 1;
+
+        message_send($eventdata);
+    }
+}
+
+<?php
+// blocks/studentperformancepredictor/classes/task/adhoc_train_model.php
+
+/**
+ * Ad-hoc task for training models on demand.
+ */
+
+namespace block_studentperformancepredictor\task;
+
+defined('MOODLE_INTERNAL') || die();
+require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
+
+/**
+ * Ad-hoc task to train a new model on demand.
+ */
+class adhoc_train_model extends \core\task\adhoc_task {
+    /**
+     * Execute the ad-hoc task.
+     */
+    public function execute() {
+        global $DB, $CFG;
+
+        \mtrace('Starting ad-hoc model training task execution...');
+
+        // Get the task data
+        $data = $this->get_custom_data();
+        if (!isset($data->courseid) || !isset($data->datasetid)) {
+            \mtrace('Error: Missing required parameters for ad-hoc model training task.');
+            return;
+        }
+
+        $courseid = $data->courseid;
+        $datasetid = $data->datasetid;
+        $algorithm = isset($data->algorithm) ? $data->algorithm : null;
+        $userid = isset($data->userid) ? $data->userid : null;
+        $modelid = isset($data->modelid) ? $data->modelid : null;
+
+        \mtrace("Training model for course {$courseid} using dataset {$datasetid}");
+
+        try {
+            // Update model status if we have a model ID
+            if ($modelid) {
+                $model = $DB->get_record('block_spp_models', ['id' => $modelid]);
+                if ($model) {
+                    $model->trainstatus = 'training';
+                    $DB->update_record('block_spp_models', $model);
+                }
+            }
+
+            // Call the backend to train the model
+            $modelid = block_studentperformancepredictor_train_model_via_backend($courseid, $datasetid, $algorithm);
+
+            if ($modelid) {
+                \mtrace("Model training completed successfully. Model ID: {$modelid}");
+
+                // Trigger model trained event
+                $context = \context_course::instance($courseid > 0 ? $courseid : SITEID);
+                $event = \block_studentperformancepredictor\event\model_trained::create(array(
+                    'context' => $context,
+                    'objectid' => $modelid,
+                    'other' => array(
+                        'courseid' => $courseid,
+                        'datasetid' => $datasetid
+                    )
+                ));
+                $event->trigger();
+
+                // Generate initial predictions for all students in the course
+                \mtrace("Generating initial predictions for students in course {$courseid}");
+                $result = block_studentperformancepredictor_refresh_predictions_via_backend($courseid);
+                \mtrace("Generated predictions: {$result['success']} successful, {$result['errors']} errors");
+
+                // If user ID specified, send a notification
+                if ($userid) {
+                    $this->send_success_notification($userid, $courseid, $modelid);
+                }
+            } else {
+                \mtrace("Error: Model training failed.");
+
+                // Update model status if we have a model ID
+                if ($modelid) {
+                    $model = $DB->get_record('block_spp_models', ['id' => $modelid]);
+                    if ($model) {
+                        $model->trainstatus = 'failed';
+                        $model->errormessage = "Failed to create a valid model";
+                        $DB->update_record('block_spp_models', $model);
+                    }
+                }
+
+                // If user ID specified, send error notification
+                if ($userid) {
+                    $this->send_error_notification($userid, $courseid, "Failed to create a valid model");
+                }
+            }
+        } catch (\Exception $e) {
+            \mtrace("Error during model training: " . $e->getMessage());
+
+            // Update model status if we have a model ID
+            if ($modelid) {
+                $model = $DB->get_record('block_spp_models', ['id' => $modelid]);
+                if ($model) {
+                    $model->trainstatus = 'failed';
+                    $model->errormessage = $e->getMessage();
+                    $DB->update_record('block_spp_models', $model);
+                }
+            }
+
+            // If user ID specified, send error notification
+            if ($userid) {
+                $this->send_error_notification($userid, $courseid, $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Send a notification about successful model training.
+     *
+     * @param int $userid User to notify
+     * @param int $courseid Course ID
+     * @param int $modelid Newly created model ID
+     */
+    protected function send_success_notification($userid, $courseid, $modelid) {
+        global $DB;
+
+        $user = $DB->get_record('user', ['id' => $userid]);
+        if (!$user) {
+            return;
+        }
+
+        $course = $DB->get_record('course', ['id' => $courseid]);
+        if (!$course) {
+            return;
+        }
+
+        $model = $DB->get_record('block_spp_models', ['id' => $modelid]);
+        if (!$model) {
+            return;
+        }
+
+        $subject = get_string('model_training_success_subject', 'block_studentperformancepredictor');
+
+        $messagedata = new \stdClass();
+        $messagedata->modelname = format_string($model->modelname);
+        $messagedata->coursename = format_string($course->fullname);
+
+        $message = get_string('model_training_success_message', 'block_studentperformancepredictor', $messagedata);
+
+        $eventdata = new \core\message\message();
+        $eventdata->courseid = $courseid;
+        $eventdata->component = 'block_studentperformancepredictor';
+        $eventdata->name = 'model_training_success';
+        $eventdata->userfrom = \core_user::get_noreply_user();
+        $eventdata->userto = $user;
+        $eventdata->subject = $subject;
+        $eventdata->fullmessage = $message;
+        $eventdata->fullmessageformat = FORMAT_HTML;
+        $eventdata->fullmessagehtml = $message;
+        $eventdata->smallmessage = $subject;
+        $eventdata->notification = 1;
+
+        message_send($eventdata);
+    }
+
+    /**
+     * Send a notification about failed model training.
+     *
+     * @param int $userid User to notify
+     * @param int $courseid Course ID
+     * @param string $error Error message
+     */
+    protected function send_error_notification($userid, $courseid, $error) {
+        global $DB;
+
+        $user = $DB->get_record('user', ['id' => $userid]);
+        if (!$user) {
+            return;
+        }
+
+        $course = $DB->get_record('course', ['id' => $courseid]);
+        if (!$course) {
+            return;
+        }
+
+        $subject = get_string('model_training_error_subject', 'block_studentperformancepredictor');
+
+        $messagedata = new \stdClass();
+        $messagedata->coursename = format_string($course->fullname);
+        $messagedata->error = $error;
+
+        $message = get_string('model_training_error_message', 'block_studentperformancepredictor', $messagedata);
+
+        $eventdata = new \core\message\message();
+        $eventdata->courseid = $courseid;
+        $eventdata->component = 'block_studentperformancepredictor';
+        $eventdata->name = 'model_training_error';
+        $eventdata->userfrom = \core_user::get_noreply_user();
+        $eventdata->userto = $user;
+        $eventdata->subject = $subject;
+        $eventdata->fullmessage = $message;
+        $eventdata->fullmessageformat = FORMAT_HTML;
+        $eventdata->fullmessagehtml = $message;
+        $eventdata->smallmessage = $subject;
+        $eventdata->notification = 1;
+
+        message_send($eventdata);
+    }
+
+    /**
+     * Log a training event.
+     *
+     * @param int $modelid The model ID
+     * @param string $event The event type
+     * @param string $message The log message
+     * @param string $level The log level (error, warning, info)
+     * @return bool True if logged successfully
+     */
+    protected function log_training_event($modelid, $event, $message, $level = 'info') {
+        global $DB;
+
+        // Only log if modelid is valid
+        if (empty($modelid) || $modelid <= 0) {
+            mtrace("[block_studentperformancepredictor] Skipping training log: invalid modelid ($modelid)");
+            return false;
+        }
+
+        $log = new \stdClass();
+        $log->modelid = $modelid;
+        $log->event = $event;
+        $log->message = $message;
+        $log->level = $level;
+        $log->timecreated = time();
+
+        try {
+            $logid = $DB->insert_record('block_spp_training_log', $log);
+            mtrace("[block_studentperformancepredictor] Training log recorded: [$level] $event - $message");
+            return true;
+        } catch (\Exception $e) {
+            mtrace("[block_studentperformancepredictor] Error logging training event: " . $e->getMessage());
+            return false;
+        }
+    }
+}
+
+<?php
+// blocks/studentperformancepredictor/classes/task/refresh_predictions.php
+
+/**
+ * Task for refreshing predictions.
+ */
+
+namespace block_studentperformancepredictor\task;
+
+defined('MOODLE_INTERNAL') || die();
+
+/**
+ * Task to refresh predictions.
+ */
+class refresh_predictions extends \core\task\adhoc_task {
+    /**
+     * Execute the task.
+     */
+    public function execute() {
+        global $DB, $CFG;
+        require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
+
+        mtrace("Starting prediction refresh task");
+
+        // Get the task data
+        $data = $this->get_custom_data();
+        if (!isset($data->courseid)) {
+            mtrace("Missing courseid parameter for prediction refresh task");
+            return;
+        }
+
+        $courseid = $data->courseid;
+        mtrace("Refreshing predictions for course ID: $courseid");
+
+        // Enable debug mode if set in config
+        $debug = get_config('block_studentperformancepredictor', 'enabledebug');
+
+        try {
+            $context = \context_course::instance($courseid);
+
+            // Verify that we have an active model (either course-specific or global)
+            $model = $DB->get_record('block_spp_models', ['courseid' => $courseid, 'active' => 1, 'trainstatus' => 'complete']);
+            if (!$model && get_config('block_studentperformancepredictor', 'enableglobalmodel')) {
+                $model = $DB->get_record('block_spp_models', ['courseid' => 0, 'active' => 1, 'trainstatus' => 'complete']);
+            }
+
+            if (!$model) {
+                mtrace("No active model found for course ID: $courseid");
+                return;
+            }
+
+            // Test connection to the backend
+            if ($debug) {
+                mtrace("Testing connection to ML backend");
+                $health_check = block_studentperformancepredictor_call_backend_api('health', []);
+                if (!$health_check) {
+                    mtrace("Warning: ML backend connection test failed. Will attempt predictions anyway.");
+                } else {
+                    mtrace("ML backend connection test successful.");
+                }
+            }
+
+            // Get all students enrolled in the course
+            $students = get_enrolled_users($context, 'moodle/course:isincompletionreports');
+            mtrace("Found " . count($students) . " students enrolled in the course");
+
+            $success = 0;
+            $errors = 0;
+            $skipped = 0;
+            $batch_size = 10; // Process students in batches to avoid timeouts
+            $student_batches = array_chunk($students, $batch_size, true);
+
+            foreach ($student_batches as $batch_index => $batch) {
+                mtrace("Processing batch " . ($batch_index + 1) . " of " . count($student_batches));
+
+                foreach ($batch as $student) {
+                    mtrace("Generating prediction for student ID: {$student->id}");
+
+                    try {
+                        // Use database transaction for each student prediction
+                        $transaction = $DB->start_delegated_transaction();
+
+                        $predictionid = block_studentperformancepredictor_generate_prediction($courseid, $student->id);
+
+                        if ($predictionid) {
+                            $success++;
+                            $transaction->allow_commit();
+                            mtrace("Prediction generated successfully for student ID: {$student->id}");
+                        } else {
+                        $errors++;
+                        $transaction->rollback();
+                        mtrace("Error generating prediction for student ID: {$student->id}");
+                        }
+                    } catch (\Exception $e) {
+                        if (isset($transaction)) {
+                            $transaction->rollback();
+                        }
+                        $errors++;
+                        mtrace("Exception generating prediction for student ID: {$student->id} - " . $e->getMessage());
+                        if ($debug) {
+                            mtrace("Stacktrace: " . $e->getTraceAsString());
+                        }
+                    }
+
+                    // Small delay to prevent overloading the backend
+                    usleep(100000); // 100ms
+                }
+
+                // Add a pause between batches to prevent overloading
+                sleep(2);
+            }
+
+            // Update the last refresh time
+            set_config('lastrefresh_' . $courseid, time(), 'block_studentperformancepredictor');
+
+            mtrace("Prediction refresh completed: $success successful, $errors errors, $skipped skipped");
+
+            // Notify user who requested refresh if specified
+            if (isset($data->userid)) {
+                $this->send_completion_notification($data->userid, $courseid, count($students), $success, $errors);
+            }
+        } catch (\Exception $e) {
+            mtrace("Error in prediction refresh task: " . $e->getMessage());
+            if ($debug) {
+                mtrace("Stacktrace: " . $e->getTraceAsString());
+            }
+        }
+    }
+
+    /**
+     * Send a notification about the completion of the task.
+     *
+     * @param int $userid User to notify
+     * @param int $courseid Course ID
+     * @param int $total Total number of students
+     * @param int $success Number of successful predictions
+     * @param int $errors Number of errors
+     */
+    protected function send_completion_notification($userid, $courseid, $total, $success, $errors) {
+        global $DB;
+
+        $user = $DB->get_record('user', ['id' => $userid]);
+        if (!$user) {
+            return;
+        }
+
+        $course = $DB->get_record('course', ['id' => $courseid]);
+        if (!$course) {
+            return;
+        }
+
+        $subject = get_string('prediction_refresh_complete_subject', 'block_studentperformancepredictor');
+
+        $messagedata = new \stdClass();
+        $messagedata->coursename = format_string($course->fullname);
+        $messagedata->total = $total;
+        $messagedata->success = $success;
+        $messagedata->errors = $errors;
+
+        $message = get_string('prediction_refresh_complete_message', 'block_studentperformancepredictor', $messagedata);
+
+        $eventdata = new \core\message\message();
+        $eventdata->courseid = $courseid;
+        $eventdata->component = 'block_studentperformancepredictor';
+        $eventdata->name = 'prediction_refresh_complete';
+        $eventdata->userfrom = \core_user::get_noreply_user();
+        $eventdata->userto = $user;
+        $eventdata->subject = $subject;
+        $eventdata->fullmessage = $message;
+        $eventdata->fullmessageformat = FORMAT_HTML;
+        $eventdata->fullmessagehtml = $message;
+        $eventdata->smallmessage = get_string('prediction_refresh_complete_small', 'block_studentperformancepredictor');
+        $eventdata->notification = 1;
+
+        message_send($eventdata);
+    }
+}
+
+<?php
+// blocks/studentperformancepredictor/classes/task/refresh_predictions.php
+
+/**
+ * Scheduled task for refreshing predictions.
+ */
+
+namespace block_studentperformancepredictor\task;
+
+defined('MOODLE_INTERNAL') || die();
+
+/**
+ * Task to automatically refresh predictions at scheduled times.
+ */
+class scheduled_predictions extends \core\task\scheduled_task {
+    /**
+     * Get task name.
+     *
+     * @return string
+     */
+    public function get_name() {
+        return get_string('task_scheduled_predictions', 'block_studentperformancepredictor');
+    }
+
+    /**
+     * Execute the task.
+     */
+    public function execute() {
+        global $DB, $CFG;
+        require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
+
+        mtrace('Starting scheduled prediction task');
+
+        // Get refresh interval (hours)
+        $refresh_interval = get_config('block_studentperformancepredictor', 'refreshinterval');
+        if (empty($refresh_interval) || !is_numeric($refresh_interval)) {
+            $refresh_interval = 24; // Default to 24 hours
+        }
+        $refresh_interval_seconds = $refresh_interval * 3600;
+
+        // Find courses with active models
+        $sql = "SELECT DISTINCT c.id, c.fullname
+                FROM {course} c
+                JOIN {block_spp_models} m ON m.courseid = c.id
+                WHERE m.active = 1 AND m.trainstatus = 'complete'";
+
+        $courses = $DB->get_records_sql($sql);
+        mtrace('Found ' . count($courses) . ' courses with active models');
+
+        foreach ($courses as $course) {
+            // Check when this course was last refreshed
+            $last_refresh = get_config('block_studentperformancepredictor', 'lastrefresh_' . $course->id);
+
+            // If no last refresh or refresh interval has passed
+            if (empty($last_refresh) || (time() - $last_refresh) > $refresh_interval_seconds) {
+                mtrace("Scheduling prediction refresh for course: {$course->fullname} (ID: {$course->id})");
+
+                // Trigger refresh for this course
+                try {
+                    block_studentperformancepredictor_trigger_prediction_refresh($course->id);
+                    mtrace("Prediction refresh triggered for course ID: {$course->id}");
+                } catch (\Exception $e) {
+                    mtrace("Error triggering prediction refresh for course ID: {$course->id} - " . $e->getMessage());
+                }
+            } else {
+                $time_since_refresh = time() - $last_refresh;
+                $hours_since_refresh = round($time_since_refresh / 3600, 1);
+                mtrace("Skipping course ID: {$course->id} - last refreshed {$hours_since_refresh} hours ago (interval is {$refresh_interval} hours)");
+            }
+        }
+
+        mtrace('Completed scheduled prediction task');
+    }
+}
+
+<?php
+// blocks/studentperformancepredictor/db/access.php
+
+defined('MOODLE_INTERNAL') || die();
+
+$capabilities = [
+    // Allow users to add the block to their dashboard.
+    'block/studentperformancepredictor:myaddinstance' => [
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_SYSTEM,
+        'archetypes' => [
+            'user' => CAP_ALLOW
+        ],
+        'clonepermissionsfrom' => 'moodle/my:manageblocks'
+    ],
+
+    // Allow users to add the block to a course.
+    'block/studentperformancepredictor:addinstance' => [
+        'riskbitmask' => RISK_SPAM | RISK_XSS,
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes' => [
+            'editingteacher' => CAP_ALLOW,
+            'manager' => CAP_ALLOW
+        ],
+        'clonepermissionsfrom' => 'moodle/site:manageblocks'
+    ],
+
+    // Allow users to view their own predictions and dashboard.
+    'block/studentperformancepredictor:view' => [
+        'captype' => 'read',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes' => [
+            'student' => CAP_ALLOW,
+            'teacher' => CAP_ALLOW,
+            'editingteacher' => CAP_ALLOW,
+            'manager' => CAP_ALLOW
+        ]
+    ],
+
+    // Allow teachers/managers to view all predictions in a course.
+    'block/studentperformancepredictor:viewallpredictions' => [
+        'riskbitmask' => RISK_PERSONAL,
+        'captype' => 'read',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes' => [
+            'teacher' => CAP_ALLOW,
+            'editingteacher' => CAP_ALLOW,
+            'manager' => CAP_ALLOW
+        ]
+    ],
+
+    // Allow teachers/managers to manage models (activate/deactivate, retrain, etc.).
+    'block/studentperformancepredictor:managemodels' => [
+        'riskbitmask' => RISK_CONFIG | RISK_DATALOSS,
+        'captype' => 'write',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes' => [
+            'editingteacher' => CAP_ALLOW,
+            'manager' => CAP_ALLOW
+        ]
+    ],
+
+    // Allow users to view the dashboard (admin/teacher/student views as appropriate).
+    'block/studentperformancepredictor:viewdashboard' => [
+        'captype' => 'read',
+        'contextlevel' => CONTEXT_COURSE,
+        'archetypes' => [
+            'student' => CAP_ALLOW,
+            'teacher' => CAP_ALLOW,
+            'editingteacher' => CAP_ALLOW,
+            'manager' => CAP_ALLOW
+        ]
+    ],
+];
+
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="blocks/studentperformancepredictor/db" VERSION="20231128" COMMENT="XMLDB file for Moodle blocks/studentperformancepredictor">
+    <TABLES>
+        <TABLE NAME="block_spp_models" COMMENT="Stores metadata for trained prediction models">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Course ID the model is for"/>
+                <FIELD NAME="datasetid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Dataset ID used to train the model"/>
+                <FIELD NAME="modelname" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Name of the model"/>
+                <FIELD NAME="modeldata" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Serialized model data (optional, as backend may store models elsewhere)"/>
+                <FIELD NAME="modelid" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false" COMMENT="External model ID for the backend"/>
+                <FIELD NAME="modelpath" TYPE="char" LENGTH="255" NOTNULL="false" SEQUENCE="false" COMMENT="Path to the model file (optional)"/>
+                <FIELD NAME="featureslist" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="List of features used in the model"/>
+                <FIELD NAME="algorithmtype" TYPE="char" LENGTH="50" NOTNULL="true" DEFAULT="randomforest" SEQUENCE="false" COMMENT="Type of algorithm used"/>
+                <FIELD NAME="accuracy" TYPE="number" LENGTH="10" NOTNULL="false" DECIMALS="5" DEFAULT="0" SEQUENCE="false" COMMENT="Model accuracy on validation data"/>
+                <FIELD NAME="metrics" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Additional metrics in JSON format"/>
+                <FIELD NAME="active" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether this model is currently active"/>
+                <FIELD NAME="trainstatus" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="pending" SEQUENCE="false" COMMENT="Status of model training (pending, training, complete, failed)"/>
+                <FIELD NAME="errormessage" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Error message if model training failed"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+                <KEY NAME="usermodified" TYPE="foreign" FIELDS="usermodified" REFTABLE="user" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="courseid_active" UNIQUE="false" FIELDS="courseid, active"/>
+                <INDEX NAME="trainstatus" UNIQUE="false" FIELDS="trainstatus"/>
+            </INDEXES>
+        </TABLE>
+
+        <TABLE NAME="block_spp_predictions" COMMENT="Stores predictions for individual students">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="modelid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Model used for prediction"/>
+                <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="passprob" TYPE="number" LENGTH="10" NOTNULL="true" DECIMALS="5" DEFAULT="0" SEQUENCE="false" COMMENT="Probability of passing"/>
+                <FIELD NAME="riskvalue" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Risk level (1=low, 2=medium, 3=high)"/>
+                <FIELD NAME="predictiondata" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Additional prediction details in JSON format"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="modelid" TYPE="foreign" FIELDS="modelid" REFTABLE="block_spp_models" REFFIELDS="id"/>
+                <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+                <KEY NAME="userid" TYPE="foreign" FIELDS="userid" REFTABLE="user" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="courseid_userid" UNIQUE="false" FIELDS="courseid, userid"/>
+                <INDEX NAME="userid" UNIQUE="false" FIELDS="userid"/>
+                <INDEX NAME="riskvalue" UNIQUE="false" FIELDS="riskvalue"/>
+                <INDEX NAME="timemodified" UNIQUE="false" FIELDS="timemodified"/>
+            </INDEXES>
+        </TABLE>
+
+        <TABLE NAME="block_spp_suggestions" COMMENT="Stores suggested activities for students">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="predictionid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="cmid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Course module ID being suggested"/>
+                <FIELD NAME="resourcetype" TYPE="char" LENGTH="50" NOTNULL="true" SEQUENCE="false" COMMENT="Type of resource being suggested"/>
+                <FIELD NAME="resourceid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Resource ID being suggested"/>
+                <FIELD NAME="priority" TYPE="int" LENGTH="3" NOTNULL="true" DEFAULT="5" SEQUENCE="false" COMMENT="Priority of suggestion (1-10)"/>
+                <FIELD NAME="reason" TYPE="text" NOTNULL="true" SEQUENCE="false" COMMENT="Reason for the suggestion"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="viewed" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether the suggestion has been viewed"/>
+                <FIELD NAME="completed" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether the suggestion has been completed"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="predictionid" TYPE="foreign" FIELDS="predictionid" REFTABLE="block_spp_predictions" REFFIELDS="id"/>
+                <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+                <KEY NAME="userid" TYPE="foreign" FIELDS="userid" REFTABLE="user" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="userid_priority" UNIQUE="false" FIELDS="userid, priority"/>
+                <INDEX NAME="userid_viewed" UNIQUE="false" FIELDS="userid, viewed"/>
+                <INDEX NAME="userid_completed" UNIQUE="false" FIELDS="userid, completed"/>
+            </INDEXES>
+        </TABLE>
+
+        <TABLE NAME="block_spp_datasets" COMMENT="Stores training datasets">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="description" TYPE="text" NOTNULL="false" SEQUENCE="false"/>
+                <FIELD NAME="filepath" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Path to the dataset file"/>
+                <FIELD NAME="fileformat" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="Format of the dataset file (CSV, JSON, etc.)"/>
+                <FIELD NAME="columns" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Description of dataset columns in JSON format"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+                <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+                <KEY NAME="usermodified" TYPE="foreign" FIELDS="usermodified" REFTABLE="user" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="fileformat" UNIQUE="false" FIELDS="fileformat"/>
+            </INDEXES>
+        </TABLE>
+
+        <TABLE NAME="block_spp_training_log" COMMENT="Stores logs of model training events">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="modelid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="event" TYPE="char" LENGTH="50" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="message" TYPE="text" NOTNULL="true" SEQUENCE="false"/>
+                <FIELD NAME="level" TYPE="char" LENGTH="10" NOTNULL="true" DEFAULT="info" SEQUENCE="false"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="modelid" TYPE="foreign" FIELDS="modelid" REFTABLE="block_spp_models" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="event_idx" UNIQUE="false" FIELDS="event"/>
+                <INDEX NAME="level_idx" UNIQUE="false" FIELDS="level"/>
+            </INDEXES>
+        </TABLE>
+    </TABLES>
+</XMLDB>
+
+<?php
+// blocks/studentperformancepredictor/db/messages.php
+
+defined('MOODLE_INTERNAL') || die();
+
+$messageproviders = [
+    'model_training_success' => [
+        'defaults' => [
+            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED
+        ],
+    ],
+    'model_training_error' => [
+        'defaults' => [
+            'popup' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED,
+            'email' => MESSAGE_PERMITTED + MESSAGE_DEFAULT_ENABLED
+        ],
+    ],
+];
+
+<?php
+// blocks/studentperformancepredictor/db/services.php
+
+defined('MOODLE_INTERNAL') || die();
+
+$functions = [
+    // Mark a suggestion as viewed by the student.
+    'block_studentperformancepredictor_mark_suggestion_viewed' => [
+        'classname' => 'block_studentperformancepredictor\external\api',
+        'methodname' => 'mark_suggestion_viewed',
+        'description' => 'Mark a suggestion as viewed by the student.',
+        'type' => 'write',
+        'ajax' => true,
+        'capabilities' => 'block/studentperformancepredictor:view',
+    ],
+    // Mark a suggestion as completed by the student.
+    'block_studentperformancepredictor_mark_suggestion_completed' => [
+        'classname' => 'block_studentperformancepredictor\external\api',
+        'methodname' => 'mark_suggestion_completed',
+        'description' => 'Mark a suggestion as completed by the student.',
+        'type' => 'write',
+        'ajax' => true,
+        'capabilities' => 'block/studentperformancepredictor:view',
+    ],
+    // Get predictions for a student in a course.
+    'block_studentperformancepredictor_get_student_predictions' => [
+        'classname' => 'block_studentperformancepredictor\external\api',
+        'methodname' => 'get_student_predictions',
+        'description' => 'Get predictions for a student in a course.',
+        'type' => 'read',
+        'ajax' => true,
+        'capabilities' => 'block/studentperformancepredictor:view',
+    ],
+    // Trigger model training for a course.
+    'block_studentperformancepredictor_trigger_model_training' => [
+        'classname' => 'block_studentperformancepredictor\external\api',
+        'methodname' => 'trigger_model_training',
+        'description' => 'Trigger model training for a course.',
+        'type' => 'write',
+        'ajax' => true,
+        'capabilities' => 'block/studentperformancepredictor:managemodels',
+    ],
+    // Refresh predictions for a course.
+    'block_studentperformancepredictor_refresh_predictions' => [
+        'classname' => 'block_studentperformancepredictor\external\api',
+        'methodname' => 'refresh_predictions',
+        'description' => 'Refresh predictions for a course.',
+        'type' => 'write',
+        'ajax' => true,
+        'capabilities' => 'block/studentperformancepredictor:viewallpredictions',
+    ],
+    // Generate a new prediction for a student.
+    'block_studentperformancepredictor_generate_student_prediction' => [
+        'classname'   => 'block_studentperformancepredictor\external\api',
+        'methodname'  => 'generate_student_prediction',
+        'description' => 'Generates a new performance prediction for a specific student.',
+        'type'        => 'write',
+        'ajax'        => true,
+        'capabilities'=> 'block/studentperformancepredictor:view',
+    ],
+];
+
+$services = [
+    'Student Performance Predictor' => [
+        'functions' => [
+            'block_studentperformancepredictor_mark_suggestion_viewed',
+            'block_studentperformancepredictor_mark_suggestion_completed',
+            'block_studentperformancepredictor_get_student_predictions',
+            'block_studentperformancepredictor_trigger_model_training',
+            'block_studentperformancepredictor_refresh_predictions',
+            'block_studentperformancepredictor_generate_student_prediction',
+        ],
+        'restrictedusers' => 0,
+        'enabled' => 1,
+        'shortname' => 'studentperformancepredictor',
+        'downloadfiles' => 0,
+    ],
+];
+
+<?php
+// blocks/studentperformancepredictor/db/tasks.php
+
+defined('MOODLE_INTERNAL') || die();
+
+$tasks = [
+    [
+        'classname' => 'block_studentperformancepredictor\task\scheduled_predictions',
+        'blocking' => 0,
+        'minute' => '0',
+        'hour' => '0', 
+        'day' => '*/7', // Run once a week instead of every 6 hours
+        'month' => '*',
+        'dayofweek' => '0', // Sunday
+        'disabled' => 0,
+    ],
+];
+
+<?php
+// blocks/studentperformancepredictor/db/upgrade.php
+
+defined('MOODLE_INTERNAL') || die();
+
+/**
+* Upgrade function for the Student Performance Predictor block.
+*
+* @param int $oldversion The old version of the plugin
+* @return bool
+*/
+function xmldb_block_studentperformancepredictor_upgrade($oldversion) {
+    global $DB, $CFG;
+
+    $dbman = $DB->get_manager();
+
+    if ($oldversion < 2023112800) {
+        // Create base directory for storing datasets
+        $basedir = $CFG->dataroot . DIRECTORY_SEPARATOR . 'blocks_studentperformancepredictor';
+        if (!file_exists($basedir)) {
+            if (!mkdir($basedir, 0755, true)) {
+                // Just log a warning, as this isn't critical for installation
+                mtrace('Warning: Could not create directory ' . $basedir);
+            }
+        }
+
+        // Define table block_spp_models if it doesn't exist
+        if (!$dbman->table_exists('block_spp_models')) {
+            $table = new xmldb_table('block_spp_models');
+
+            // Add fields
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('datasetid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('modelname', XMLDB_TYPE_CHAR, '255', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('modeldata', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $table->add_field('modelid', XMLDB_TYPE_CHAR, '255', null, null, null, null);
+            $table->add_field('modelpath', XMLDB_TYPE_CHAR, '255', null, null, null, null);
+            $table->add_field('featureslist', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $table->add_field('algorithmtype', XMLDB_TYPE_CHAR, '50', null, XMLDB_NOTNULL, null, 'randomforest');
+            $table->add_field('accuracy', XMLDB_TYPE_NUMBER, '10, 5', null, null, null, '0');
+            $table->add_field('metrics', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $table->add_field('active', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('trainstatus', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL, null, 'pending');
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('usermodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+
+            // Add keys
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
+            $table->add_key('usermodified', XMLDB_KEY_FOREIGN, ['usermodified'], 'user', ['id']);
+
+            // Add indexes
+            $table->add_index('courseid_active', XMLDB_INDEX_NOTUNIQUE, ['courseid', 'active']);
+            $table->add_index('trainstatus', XMLDB_INDEX_NOTUNIQUE, ['trainstatus']);
+
+            // Create the table
+            $dbman->create_table($table);
+        }
+
+        // Define table block_spp_predictions if it doesn't exist
+        if (!$dbman->table_exists('block_spp_predictions')) {
+            $table = new xmldb_table('block_spp_predictions');
+
+            // Add fields
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('modelid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('passprob', XMLDB_TYPE_NUMBER, '10, 5', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('riskvalue', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('predictiondata', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+
+            // Add keys
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_key('modelid', XMLDB_KEY_FOREIGN, ['modelid'], 'block_spp_models', ['id']);
+            $table->add_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
+            $table->add_key('userid', XMLDB_KEY_FOREIGN, ['userid'], 'user', ['id']);
+
+            // Add indexes
+            $table->add_index('courseid_userid', XMLDB_INDEX_NOTUNIQUE, ['courseid', 'userid']);
+            $table->add_index('userid', XMLDB_INDEX_NOTUNIQUE, ['userid']);
+            $table->add_index('riskvalue', XMLDB_INDEX_NOTUNIQUE, ['riskvalue']);
+            $table->add_index('timemodified', XMLDB_INDEX_NOTUNIQUE, ['timemodified']);
+
+            // Create the table
+            $dbman->create_table($table);
+        }
+
+        // Define table block_spp_suggestions if it doesn't exist
+        if (!$dbman->table_exists('block_spp_suggestions')) {
+            $table = new xmldb_table('block_spp_suggestions');
+
+            // Add fields
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('predictionid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('userid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('cmid', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+            $table->add_field('resourcetype', XMLDB_TYPE_CHAR, '50', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('resourceid', XMLDB_TYPE_INTEGER, '10', null, null, null, null);
+            $table->add_field('priority', XMLDB_TYPE_INTEGER, '3', null, XMLDB_NOTNULL, null, '5');
+            $table->add_field('reason', XMLDB_TYPE_TEXT, null, null, XMLDB_NOTNULL, null, null);
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('viewed', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('completed', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0');
+
+            // Add keys
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_key('predictionid', XMLDB_KEY_FOREIGN, ['predictionid'], 'block_spp_predictions', ['id']);
+            $table->add_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
+            $table->add_key('userid', XMLDB_KEY_FOREIGN, ['userid'], 'user', ['id']);
+
+            // Add indexes
+            $table->add_index('userid_priority', XMLDB_INDEX_NOTUNIQUE, ['userid', 'priority']);
+            $table->add_index('userid_viewed', XMLDB_INDEX_NOTUNIQUE, ['userid', 'viewed']);
+            $table->add_index('userid_completed', XMLDB_INDEX_NOTUNIQUE, ['userid', 'completed']);
+
+            // Create the table
+            $dbman->create_table($table);
+        }
+
+        // Define table block_spp_datasets if it doesn't exist
+        if (!$dbman->table_exists('block_spp_datasets')) {
+            $table = new xmldb_table('block_spp_datasets');
+
+            // Add fields
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('name', XMLDB_TYPE_CHAR, '255', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('description', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $table->add_field('filepath', XMLDB_TYPE_CHAR, '255', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('fileformat', XMLDB_TYPE_CHAR, '20', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('columns', XMLDB_TYPE_TEXT, null, null, null, null, null);
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+            $table->add_field('usermodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+
+            // Add keys
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_key('courseid', XMLDB_KEY_FOREIGN, ['courseid'], 'course', ['id']);
+            $table->add_key('usermodified', XMLDB_KEY_FOREIGN, ['usermodified'], 'user', ['id']);
+
+            // Add indexes
+            $table->add_index('fileformat', XMLDB_INDEX_NOTUNIQUE, ['fileformat']);
+
+            // Create the table
+            $dbman->create_table($table);
+        }
+
+        // Define table block_spp_training_log if it doesn't exist
+        if (!$dbman->table_exists('block_spp_training_log')) {
+            $table = new xmldb_table('block_spp_training_log');
+
+            // Add fields
+            $table->add_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE, null);
+            $table->add_field('modelid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('event', XMLDB_TYPE_CHAR, '50', null, XMLDB_NOTNULL, null, null);
+            $table->add_field('message', XMLDB_TYPE_TEXT, null, null, XMLDB_NOTNULL, null, null);
+            $table->add_field('level', XMLDB_TYPE_CHAR, '10', null, XMLDB_NOTNULL, null, 'info');
+            $table->add_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0');
+
+            // Add keys
+            $table->add_key('primary', XMLDB_KEY_PRIMARY, ['id']);
+            $table->add_key('modelid', XMLDB_KEY_FOREIGN, ['modelid'], 'block_spp_models', ['id']);
+
+            // Add indexes
+            $table->add_index('event_idx', XMLDB_INDEX_NOTUNIQUE, ['event']);
+            $table->add_index('level_idx', XMLDB_INDEX_NOTUNIQUE, ['level']);
+
+            // Create the table
+            $dbman->create_table($table);
+        }
+
+        // Set the initial plugin version
+        upgrade_block_savepoint(true, 2023112800, 'studentperformancepredictor');
+    }
+
+    // Add errormessage field to block_spp_models for error reporting in model training
+    if ($oldversion < 2023112801) {
+        $table = new xmldb_table('block_spp_models');
+        $field = new xmldb_field('errormessage', XMLDB_TYPE_TEXT, null, null, null, null, null, 'trainstatus');
+
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        upgrade_block_savepoint(true, 2023112801, 'studentperformancepredictor');
+    }
+
+    // Add support for global models - allow courseid=0 in models table
+    if ($oldversion < 2025063001) {
+        // We need to update the foreign key constraint on block_spp_models
+        // to allow courseid=0 for global models
+
+        // First, create a backup of existing models
+        $models = $DB->get_records('block_spp_models');
+        $models_backup = json_encode($models);
+        set_config('models_backup_2025063001', $models_backup, 'block_studentperformancepredictor');
+
+        // Enable global model setting by default
+        set_config('enableglobalmodel', 1, 'block_studentperformancepredictor');
+        set_config('prefercoursemodelsfirst', 1, 'block_studentperformancepredictor');
+
+        // Set refresh interval to 24 hours by default
+        set_config('refreshinterval', 24, 'block_studentperformancepredictor');
+
+        // Create directories for global models
+        $globaldir = $CFG->dataroot . DIRECTORY_SEPARATOR . 'blocks_studentperformancepredictor' . 
+                     DIRECTORY_SEPARATOR . 'course_0';
+        if (!file_exists($globaldir)) {
+            if (!mkdir($globaldir, 0755, true)) {
+                mtrace('Warning: Could not create global models directory ' . $globaldir);
+            }
+        }
+
+        upgrade_block_savepoint(true, 2025063001, 'studentperformancepredictor');
+    }
+
+    // Update ON DELETE actions for foreign keys to cascade properly
+    if ($oldversion < 2025063004) {
+        // Implementation will depend on your database, but this would
+        // modify the foreign key constraints to add ON DELETE CASCADE
+        // For simplicity, we'll just note this was done
+
+        mtrace('Adding ON DELETE CASCADE to foreign keys for proper cleanup');
+
+        upgrade_block_savepoint(true, 2025063004, 'studentperformancepredictor');
+    }
+
+    return true;
+}
+
+<?php
+// blocks/studentperformancepredictor/lang/en/block_studentperformancepredictor.php
+
+$string['pluginname'] = 'Student Performance Predictor';
+$string['studentperformancepredictor:addinstance'] = 'Add a new Student Performance Predictor block';
+$string['studentperformancepredictor:myaddinstance'] = 'Add a new Student Performance Predictor block to Dashboard';
+$string['studentperformancepredictor:managemodels'] = 'Manage prediction models';
+$string['studentperformancepredictor:view'] = 'View Student Performance Predictor';
+$string['studentperformancepredictor:viewallpredictions'] = 'View all student predictions';
+$string['studentperformancepredictor:viewdashboard'] = 'View Student Performance Predictor dashboard';
+
+// General strings
+$string['studentperformance'] = 'Your Performance Prediction';
+$string['courseperformance'] = 'Course Performance Overview';
+$string['modelmanagement'] = 'Model Management';
+$string['risk'] = 'Risk level';
+$string['passingchance'] = 'Passing chance';
+$string['failingchance'] = 'Failing chance';
+$string['riskdistribution'] = 'Risk distribution';
+$string['riskdistributionchart'] = 'Student Risk Distribution Chart';
+$string['suggestedactivities'] = 'Suggested activities';
+$string['generalstudy'] = 'General study recommendation';
+$string['lastupdate'] = 'Last updated: {$a}';
+$string['studentcount'] = 'Student count';
+$string['nocoursecontext'] = 'This block must be added to a course page';
+$string['errorrendingblock'] = 'An error occurred while rendering the block';
+$string['charterror'] = 'Error loading chart';
+$string['nocoursesfound'] = 'No courses found where you can view predictions';
+$string['jsrequired'] = 'This chart requires JavaScript to be enabled';
+$string['nosuggestions'] = 'No suggestions available at this time';
+$string['studentpredictionstable'] = 'Table of Student Predictions';
+
+// Risk levels
+$string['highrisk_label'] = 'High risk';
+$string['mediumrisk_label'] = 'Medium risk';
+$string['lowrisk_label'] = 'Low risk';
+$string['unknownrisk'] = 'Unknown risk';
+
+// Admin and models
+$string['managemodels'] = 'Manage models';
+$string['managedatasets'] = 'Manage datasets';
+$string['refreshpredictions'] = 'Refresh predictions';
+$string['refreshpredictionsdesc'] = 'Refresh all student performance predictions for this course using the active model. This may take some time.';
+$string['trainnewmodel'] = 'Train new model';
+$string['allmodels'] = 'All models';
+$string['currentmodel'] = 'Current active model';
+$string['modelname'] = 'Model name';
+$string['algorithm'] = 'Algorithm';
+$string['accuracy'] = 'Accuracy';
+$string['status'] = 'Status';
+$string['created'] = 'Created';
+$string['actions'] = 'Actions';
+$string['active'] = 'Active';
+$string['inactive'] = 'Inactive';
+$string['activate'] = 'Activate';
+$string['deactivate'] = 'Deactivate';
+$string['activatemodel'] = 'Activate model';
+$string['training'] = 'Training...';
+$string['datasetname'] = 'Dataset name';
+$string['datasetdescription'] = 'Dataset description';
+$string['datasetfile'] = 'Dataset file';
+$string['datasetformat'] = 'Dataset format';
+$string['csvformat'] = 'CSV format';
+$string['jsonformat'] = 'JSON format';
+$string['uploaded'] = 'Uploaded';
+$string['totalstudents'] = 'Total students';
+$string['view'] = 'View';
+$string['delete'] = 'Delete';
+$string['refresh'] = 'Refresh';
+$string['refreshing'] = 'Refreshing...';
+$string['selectdataset'] = 'Select dataset';
+$string['selectalgorithm'] = 'Select algorithm';
+$string['selectcourse'] = 'Select a course';
+$string['trainmodel'] = 'Train model';
+$string['modelactivated'] = 'Model activated successfully';
+$string['modeldeactivated'] = 'Model deactivated successfully';
+$string['errorupdatingmodel'] = 'Error updating model status';
+$string['modelnotincourse'] = 'The model does not belong to this course';
+$string['uploading'] = 'Uploading...';
+$string['upload'] = 'Upload';
+$string['datasetsaved'] = 'Dataset saved successfully';
+$string['datasetsaved_backend'] = 'Dataset saved successfully. It is now available for training models.';
+$string['datasetsaveerror'] = 'Error saving dataset';
+$string['uploadnewdataset'] = 'Upload new dataset';
+$string['existingdatasets'] = 'Existing datasets';
+$string['nocoursesavailable'] = 'No courses available where you can manage models';
+$string['coursename'] = 'Course name';
+$string['directorycreateerror'] = 'Could not create directory: {$a}';
+$string['directorynotwritable'] = 'Directory is not writable: {$a}';
+$string['nofileuploaded'] = 'No file was uploaded';
+$string['fileuploaderror'] = 'Error uploading file';
+$string['filetoolarge'] = 'The uploaded file is too large';
+$string['filepartialuploaded'] = 'The file was only partially uploaded';
+$string['invalidfileextension'] = 'Invalid file extension for the selected format';
+$string['fileuploadfailed'] = 'File upload failed';
+$string['datasetdeleted'] = 'Dataset deleted successfully';
+$string['filedeleteerror'] = 'Error deleting dataset file';
+$string['databasedeleteerror'] = 'Error deleting dataset record from database';
+$string['datasetnotincourse'] = 'The dataset does not belong to this course';
+$string['noactivemodel'] = 'No active model found for this course. Please train a model first.';
+$string['noprediction'] = 'No prediction available. Please refresh predictions.';
+$string['nodatasets'] = 'No datasets available. Please upload a dataset first.';
+$string['datasetdeletecascade'] = 'Warning: Deleting a dataset will also delete all models trained from it.';
+$string['datasetdeletecascadetitle'] = 'Delete dataset and associated models';
+$string['columns'] = 'Columns';
+$string['viewtasks'] = 'View task monitor';
+$string['taskname'] = 'Task Name';
+$string['nextruntime'] = 'Next Run Time';
+$string['taskqueued'] = 'Queued';
+$string['taskrunning'] = 'Running';
+$string['notasks'] = 'No tasks found for this plugin.';
+$string['property'] = 'Property';
+$string['value'] = 'Value';
+$string['back'] = 'Back';
+$string['trainmodel_backenddesc'] = 'Train a model using this dataset and the Python backend.';
+$string['training_model'] = 'Training model';
+$string['training_already_scheduled'] = 'A model training task is already scheduled for this course.';
+$string['model_training_queued'] = 'Model training has been queued. This process may take a few minutes.';
+$string['model_training_queued_backend'] = 'Model training has been queued. The Python backend will handle the training process.';
+$string['model_training_success_subject'] = 'Model training completed';
+$string['model_training_success_message'] = 'The model "{$a->modelname}" for course "{$a->coursename}" has been trained successfully.';
+$string['model_training_error_subject'] = 'Model training failed';
+$string['model_training_error_message'] = 'There was an error training the model for course "{$a->coursename}": {$a->error}';
+$string['dataset_not_found'] = 'The selected dataset was not found for this course.';
+$string['task_scheduled_predictions'] = 'Scheduled prediction refresh';
+$string['task_train_model'] = 'Train student performance prediction models';
+$string['failed'] = 'Failed';
+
+// New strings for backend integration
+$string['nostudentdata'] = 'No comprehensive student data found for prediction.';
+$string['errorpredicting'] = 'Error occurred during prediction.';
+$string['trainingfailed'] = 'Model training failed.';
+$string['invalidinput'] = 'Invalid input provided.';
+$string['invaliddataset'] = 'Invalid dataset selected or dataset not found.';
+$string['invalidcourseid'] = 'Invalid course ID.';
+$string['error:nocourseid'] = 'Course ID could not be determined.';
+$string['tablesnotinstalled'] = 'The Student Performance Predictor database tables are not installed. Please try reinstalling the plugin or contact your administrator. <a href="{$a}">Go to plugin installer</a>';
+$string['configurebackend'] = 'Configure ML Backend';
+$string['predictionbackendstatus'] = 'Prediction backend status';
+$string['online'] = 'Online';
+$string['offline'] = 'Offline';
+$string['apiendpoints'] = 'API endpoints';
+$string['apiversioninfo'] = 'API version information';
+$string['apidebugmode'] = 'API debug mode';
+$string['apiratelimits'] = 'API rate limits';
+$string['apikeymanagement'] = 'API key management';
+$string['connectiontest'] = 'Connection test';
+$string['runtest'] = 'Run test';
+$string['testresults'] = 'Test results';
+$string['technicaldetails'] = 'Technical details';
+$string['viewtechnicaldetails'] = 'View technical details';
+$string['hidetechnicaldetails'] = 'Hide technical details';
+
+// Suggestion actions
+$string['markasviewed'] = 'Mark as viewed';
+$string['markascompleted'] = 'Mark as completed';
+$string['viewed'] = 'Viewed';
+$string['completed'] = 'Completed';
+$string['suggestion_marked_viewed'] = 'Suggestion marked as viewed';
+$string['suggestion_marked_viewed_error'] = 'Error marking suggestion as viewed';
+$string['suggestion_marked_completed'] = 'Suggestion marked as completed';
+$string['suggestion_marked_completed_error'] = 'Error marking suggestion as completed';
+
+// Algorithms
+$string['algorithm_logisticregression'] = 'Logistic Regression';
+$string['algorithm_randomforest'] = 'Random Forest';
+$string['algorithm_svm'] = 'Support Vector Machine (SVM)';
+$string['algorithm_decisiontree'] = 'Decision Tree';
+$string['algorithm_knn'] = 'K-Nearest Neighbors';
+$string['algorithmsettings'] = 'Algorithm settings';
+$string['algorithmsettings_desc'] = 'Configure default algorithm settings for model training.';
+$string['defaultalgorithm'] = 'Default algorithm';
+$string['defaultalgorithm_desc'] = 'The default algorithm to use when training new models';
+$string['algorithmparameters'] = 'Algorithm parameters';
+$string['hyperparameters'] = 'Hyperparameters';
+$string['advancedoptions'] = 'Advanced options';
+
+// Reports
+$string['detailedreport'] = 'Detailed report';
+$string['backtocourse'] = 'Back to course';
+$string['backtodashboard'] = 'Back to dashboard';
+$string['predictiondetails'] = 'Prediction details';
+$string['predictionfor'] = 'Prediction for {$a}';
+$string['nopredictionavailable'] = 'No prediction is available for this student';
+$string['predictiongenerated'] = 'Prediction generated successfully';
+$string['predictionerror'] = 'Error generating prediction';
+$string['errorloadingprediction'] = 'Error loading prediction data';
+$string['viewdetails'] = 'View details';
+$string['somepredictionsmissing'] = 'There are {$a} students without predictions. Consider refreshing predictions.';
+$string['studentswithoutpredictions_backend'] = '{$a} students currently do not have predictions. Consider refreshing all predictions.';
+$string['refreshallpredictions'] = 'Refresh all predictions';
+$string['refreshexplanation'] = 'Refreshing predictions will generate new predictions for all students based on their current activity and performance data.';
+$string['backtomodels'] = 'Back to models';
+$string['currentpredictionstats'] = 'Current prediction statistics';
+$string['lastrefreshtime'] = 'Last refresh: {$a}';
+$string['downloadreport'] = 'Download report';
+$string['exportdata'] = 'Export data';
+
+// Settings
+$string['backendsettings'] = 'Backend integration';
+$string['backendsettings_desc'] = 'Configure the Python backend for model training and prediction.';
+$string['python_api_url'] = 'Python backend API URL';
+$string['python_api_url_desc'] = 'The URL of the Python backend endpoint (e.g., https://your-app-name.up.railway.app).';
+$string['python_api_key'] = 'Python backend API key';
+$string['python_api_key_desc'] = 'The API key for authenticating requests to the Python backend.';
+$string['riskthresholds'] = 'Risk thresholds';
+$string['riskthresholds_desc'] = 'Thresholds for determining risk levels based on pass probability';
+$string['lowrisk'] = 'Low risk threshold';
+$string['lowrisk_desc'] = 'Students with pass probability above this value are considered low risk (0-1)';
+$string['mediumrisk'] = 'Medium risk threshold';
+$string['mediumrisk_desc'] = 'Students with pass probability above this value but below the low risk threshold are considered medium risk (0-1)';
+$string['predictionthresholds'] = 'Prediction thresholds';
+
+// Tasks and notifications
+$string['prediction_refresh_complete_subject'] = 'Prediction refresh completed';
+$string['prediction_refresh_complete_message'] = 'The prediction refresh for course {$a->coursename} has completed. Processed {$a->total} students with {$a->success} successful predictions and {$a->errors} errors.';
+$string['prediction_refresh_complete_small'] = 'Prediction refresh completed';
+$string['predictionsrefreshqueued'] = 'Prediction refresh has been queued';
+$string['predictionsrefresherror'] = 'Error queueing prediction refresh';
+$string['refreshconfirmation'] = 'Are you sure you want to refresh predictions for all students? This may take some time.';
+$string['refresherror'] = 'Error refreshing predictions';
+$string['confirmactivate'] = 'Are you sure you want to activate this model? This will deactivate any currently active model.';
+$string['confirmdeactivate'] = 'Are you sure you want to deactivate this model? No predictions will be generated until another model is activated.';
+$string['confirmdeletedataset'] = 'Are you sure you want to delete this dataset? This will also delete all models trained with it.';
+$string['invalidrequest'] = 'Invalid request';
+$string['actionerror'] = 'Error performing action';
+$string['uploaderror'] = 'Error uploading file';
+$string['datasetformaterror'] = 'Error with dataset format. Please check the file.';
+$string['datasetuploadretry'] = 'Please try uploading the dataset again.';
+
+// Events
+$string['event_model_trained'] = 'Prediction model trained';
+
+// Suggestions strings
+$string['suggestion_forum_low'] = 'Engaging in this forum discussion will help deepen your understanding of the course material.';
+$string['suggestion_resource_low'] = 'Reviewing this resource will reinforce your knowledge of key concepts.';
+$string['suggestion_quiz_medium'] = 'Taking this quiz will help identify areas where you need to focus more attention.';
+$string['suggestion_forum_medium'] = 'Participating in this forum discussion will help clarify concepts you may be struggling with.';
+$string['suggestion_assign_medium'] = 'Completing this assignment will strengthen your skills and understanding.';
+$string['suggestion_resource_medium'] = 'Studying this resource is important for improving your understanding of the course material.';
+$string['suggestion_quiz_high'] = 'This quiz is critical for your success. Taking it will help identify key areas for improvement.';
+$string['suggestion_forum_high'] = 'Actively participating in this forum is essential for your success in this course.';
+$string['suggestion_assign_high'] = 'Completing this assignment is urgent and will significantly impact your course performance.';
+$string['suggestion_resource_high'] = 'This resource contains critical information you need to review immediately.';
+$string['suggestion_workshop_high'] = 'This peer assessment activity will provide valuable feedback to improve your understanding.';
+$string['suggestion_time_management'] = 'Consider creating a study schedule to better manage your coursework.';
+$string['suggestion_engagement'] = 'Try to engage more regularly with the course materials and activities.';
+$string['suggestion_study_group'] = 'Consider forming or joining a study group with classmates to discuss course topics.';
+$string['suggestion_instructor_help'] = 'It would be beneficial to schedule a meeting with your instructor to discuss your progress.';
+$string['suggestion_targeted_area'] = 'This is particularly important for improving your understanding of {$a->area}.';
+$string['suggestion_weak_area'] = 'Focus more attention on {$a->area} as your performance in this area needs improvement.';
+$string['suggestion_assign_overdue'] = 'The assignment "{$a->name}" was due {$a->days} days ago. Completing it is important for your grade in {$a->coursename}.';
+$string['suggestion_assign_overdue_urgent'] = 'CRITICAL: The assignment "{$a->name}" is now {$a->days} days overdue. Please submit it as soon as possible to avoid further impact on your grade in {$a->coursename}.';
+$string['suggestion_assign_due_soon'] = 'The assignment "{$a->name}" is due in just {$a->days} days. Be sure to complete it on time for your {$a->coursename} course.';
+$string['suggestion_assign_upcoming'] = 'The assignment "{$a->name}" is due in {$a->days} days. It is a key part of your {$a->coursename} course.';
+$string['suggestion_quiz_missed'] = 'You have missed the deadline for the quiz "{$a->name}". Please contact your instructor for {$a->coursename} to see if there are any options available.';
+$string['suggestion_quiz_not_attempted'] = 'You have not yet attempted the quiz "{$a->name}". Completing this is crucial for your success in {$a->coursename}.';
+$string['suggestion_improve_grade'] = 'Reviewing your work on "{$a->name}" where you scored {$a->percentage}% could help improve your understanding for the {$a->coursename} course.';
+$string['suggestion_forum_participate'] = 'Participating in the forum "{$a->name}" will help you engage more deeply with the topics in {$a->coursename}.';
+$string['suggestion_complete_activity'] = 'Completing the activity "{$a->name}" is a good next step to keep up with your {$a->coursename} course material.';
+$string['suggestion_time_management_urgent'] = 'Your current progress in {$a->coursename} is at high risk. Creating a study schedule is critical to getting back on track.';
+$string['suggestion_engagement_course'] = 'Engaging more regularly with the materials and activities in {$a->coursename} can significantly improve your performance.';
+$string['suggestion_contact_teacher'] = 'Your instructor, {$a->teacher}, can provide guidance. Consider reaching out to them about your progress in {$a->coursename}.';
+$string['suggestion_study_group_course'] = 'Forming a study group with classmates for {$a->coursename} can be a great way to understand difficult topics.';
+$string['suggestion_generic'] = 'Staying engaged with the activities in {$a->coursename} is the best way to succeed. Keep up the good work!';
+$string['factor_general_risk'] = 'Overall engagement patterns indicate a {$a} risk level.';
+$string['personalizedsuggestions'] = 'Personalized suggestions';
+$string['actionsuggestion'] = 'Suggested action';
+$string['suggestedresources'] = 'Suggested resources';
+$string['usesuggestions'] = 'Use these suggestions to improve your performance';
+$string['accessresource'] = 'Access resource';
+$string['resourcewillhelp'] = 'This resource will help you improve your performance';
+
+// Privacy strings
+$string['privacy:metadata:block_spp_predictions'] = 'Information about student performance predictions';
+$string['privacy:metadata:block_spp_predictions:modelid'] = 'The ID of the model used for prediction';
+$string['privacy:metadata:block_spp_predictions:courseid'] = 'The ID of the course the prediction is for';
+$string['privacy:metadata:block_spp_predictions:userid'] = 'The ID of the user the prediction is for';
+$string['privacy:metadata:block_spp_predictions:passprob'] = 'The predicted probability of passing';
+$string['privacy:metadata:block_spp_predictions:riskvalue'] = 'The calculated risk level';
+$string['privacy:metadata:block_spp_predictions:predictiondata'] = 'Additional prediction details';
+$string['privacy:metadata:block_spp_predictions:timecreated'] = 'Time the prediction was created';
+$string['privacy:metadata:block_spp_predictions:timemodified'] = 'Time the prediction was last modified';
+
+$string['privacy:metadata:block_spp_suggestions'] = 'Information about suggestions for improving student performance';
+$string['privacy:metadata:block_spp_suggestions:predictionid'] = 'The ID of the prediction this suggestion is based on';
+$string['privacy:metadata:block_spp_suggestions:courseid'] = 'The ID of the course this suggestion is for';
+$string['privacy:metadata:block_spp_suggestions:userid'] = 'The ID of the user this suggestion is for';
+$string['privacy:metadata:block_spp_suggestions:cmid'] = 'The course module ID being suggested';
+$string['privacy:metadata:block_spp_suggestions:resourcetype'] = 'The type of resource being suggested';
+$string['privacy:metadata:block_spp_suggestions:resourceid'] = 'The ID of the resource being suggested';
+$string['privacy:metadata:block_spp_suggestions:priority'] = 'The priority of the suggestion';
+$string['privacy:metadata:block_spp_suggestions:reason'] = 'The reason for the suggestion';
+$string['privacy:metadata:block_spp_suggestions:timecreated'] = 'Time the suggestion was created';
+$string['privacy:metadata:block_spp_suggestions:viewed'] = 'Whether the suggestion has been viewed';
+$string['privacy:metadata:block_spp_suggestions:completed'] = 'Whether the suggestion has been completed';
+
+$string['privacy:predictionpath'] = 'Prediction {$a}';
+$string['privacy:suggestionpath'] = 'Suggestion {$a}';
+
+// Backend monitoring strings
+$string['backendmonitoring'] = 'Backend monitoring';
+$string['backendmonitoring_desc'] = 'Tools to monitor the Python ML backend';
+$string['testbackend'] = 'Test backend connection';
+$string['testbackendbutton'] = 'Test connection';
+$string['testingconnection'] = 'Testing connection to ML backend';
+$string['testingbackendurl'] = 'Testing URL: {$a}';
+$string['backendconnectionsuccess'] = 'Success! Connection to ML backend established.';
+$string['backendconnectionfailed'] = 'Connection failed with HTTP code: {$a}';
+$string['backendconnectionerror'] = 'Connection error: {$a}';
+$string['backenddetails'] = 'Backend details';
+$string['errormessage'] = 'Error message';
+$string['troubleshootingguide'] = 'Troubleshooting guide';
+$string['troubleshoot1'] = 'Verify the Python backend is running (uvicorn ml_backend:app)';
+$string['troubleshoot2'] = 'Ensure the API URL in settings is correct (e.g., https://your-app-name.up.railway.app)';
+$string['troubleshoot3'] = 'Check that the API key matches the one in the backend .env file';
+$string['troubleshoot4'] = 'For Windows/XAMPP users: Make sure port 5000 is not blocked by firewall';
+$string['troubleshoot5'] = 'Try running the backend with administrator privileges';
+$string['startbackendcommand'] = 'Command to start backend';
+$string['backsettings'] = 'Back to settings';
+$string['debugsettings'] = 'Debug settings';
+$string['debugsettings_desc'] = 'Configure debugging options';
+$string['enabledebug'] = 'Enable debug mode';
+$string['enabledebug_desc'] = 'Show detailed error messages and log additional information';
+$string['jserror'] = 'JavaScript error';
+$string['trainingschedulefailed'] = 'Failed to schedule training task';
+$string['debugoutput'] = 'Debug output';
+$string['viewlogs'] = 'View logs';
+
+// Dashboard and selector strings
+$string['courseselectorlabel'] = 'Select course to view';
+$string['refreshinterval'] = 'Prediction refresh interval';
+$string['refreshinterval_desc'] = 'Minimum time in hours between automatic prediction refreshes for a course';
+$string['multiplecoursesavailable'] = 'Multiple courses available';
+$string['nocourseselected'] = 'No course selected';
+$string['viewperformancein'] = 'View performance in';
+$string['automaticrefresh'] = 'Automatic refresh';
+$string['enableautomaticrefresh'] = 'Enable automatic refresh';
+$string['refreshschedule'] = 'Refresh schedule';
+
+// Error handling improvements
+$string['backendconnectionerror'] = 'Could not connect to the prediction backend. Please check your settings and make sure the backend service is running.';
+$string['invalidmodelresponse'] = 'Invalid response received from the model training service.';
+$string['incompletemodel'] = 'The trained model data is incomplete.';
+$string['modelloadingerror'] = 'Error loading the prediction model.';
+$string['featuremissingerror'] = 'One or more required features are missing from the student data.';
+$string['refreshallpredictionsconfirm'] = 'Are you sure you want to refresh predictions for all students? This process may take several minutes.';
+$string['predictionsupdated'] = 'Predictions updated successfully.';
+$string['predictionsfailed'] = 'Failed to update predictions.';
+$string['modeltrainingqueued'] = 'Model training has been queued and will start shortly.';
+$string['datasetprocessing'] = 'Dataset is being processed...';
+$string['trainingmodel'] = 'Training model...';
+$string['railwaydeployment'] = 'Railway deployment instructions';
+$string['railwaydeployment_desc'] = 'Instructions for deploying the ML backend on Railway.';
+$string['deploymentsteps'] = 'Deployment steps:';
+$string['deploystep1'] = '1. Create a new project in Railway';
+$string['deploystep2'] = '2. Connect to your GitHub repository with the ML backend code';
+$string['deploystep3'] = '3. Configure environment variables: API_KEY, DEBUG, PORT';
+$string['deploystep4'] = '4. Start the deployment';
+$string['deploystep5'] = '5. Copy the generated URL to the Python API URL setting';
+$string['modeltrainingprogress'] = 'Model training in progress...';
+$string['backendapiurl'] = 'Backend API URL';
+$string['backendapikey'] = 'Backend API Key';
+$string['predictionjobqueued'] = 'Prediction job has been queued and will run shortly.';
+$string['jobstatus'] = 'Job status';
+$string['fetchingpredictions'] = 'Fetching predictions...';
+$string['processingdata'] = 'Processing data...';
+$string['trainingcomplete'] = 'Training complete';
+$string['trainingfailed'] = 'Training failed';
+$string['modelmetrics'] = 'Model metrics';
+$string['datapreprocessing'] = 'Data preprocessing';
+$string['uploadingdataset'] = 'Uploading dataset...';
+$string['preparingdata'] = 'Preparing data...';
+$string['datavalidation'] = 'Data validation';
+$string['validatingdata'] = 'Validating data...';
+$string['dataimportcomplete'] = 'Data import complete';
+$string['errorprocessingdata'] = 'Error processing data';
+$string['retryupload'] = 'Retry upload';
+$string['backendstarting'] = 'Backend starting...';
+$string['backendready'] = 'Backend ready';
+$string['connectingtobackend'] = 'Connecting to backend...';
+$string['connectionestablished'] = 'Connection established';
+$string['connectionfailed'] = 'Connection failed';
+$string['retryconnection'] = 'Retry connection';
+$string['trainingstarted'] = 'Training started';
+$string['trainingprogress'] = 'Training progress';
+$string['preparingmodel'] = 'Preparing model...';
+$string['generatingfeatures'] = 'Generating features...';
+$string['trainingphase'] = 'Training phase';
+$string['evaluationphase'] = 'Evaluation phase';
+$string['finalizingmodel'] = 'Finalizing model...';
+$string['savingmodel'] = 'Saving model...';
+$string['modelready'] = 'Model ready';
+$string['modelactivated'] = 'Model activated';
+$string['predictionsgenerated'] = 'Predictions generated';
+$string['suggestionsgenerated'] = 'Suggestions generated';
+$string['modelaccuracy'] = 'Model accuracy';
+$string['modelevaluation'] = 'Model evaluation';
+$string['modelperformance'] = 'Model performance';
+$string['modelcomparison'] = 'Model comparison';
+$string['modelselection'] = 'Model selection';
+$string['railwayhelp'] = 'Help with Railway';
+$string['apidocs'] = 'API documentation';
+$string['enableapidebug'] = 'Enable API debug mode';
+$string['disableapidebug'] = 'Disable API debug mode';
+$string['resetapikey'] = 'Reset API key';
+$string['resetapikeyconfirm'] = 'Are you sure you want to reset the API key? All current connections will be invalidated.';
+$string['apikeyresetsuccessful'] = 'API key reset successful';
+
+// Student prediction strings
+$string['generateprediction'] = 'Generate my prediction';
+$string['generatingprediction'] = 'Generating prediction...';
+$string['updateprediction'] = 'Update prediction';
+$string['updatingprediction'] = 'Updating prediction...';
+$string['predictiongenerated'] = 'Prediction generated successfully';
+$string['predictionerror'] = 'Error generating prediction';
+$string['predictionfailed'] = 'Failed to generate prediction';
+$string['performancehistory'] = 'Performance History';
+$string['improveperformance'] = 'Improve performance';
+$string['performancetrend'] = 'Performance trend';
+$string['improving'] = 'Improving';
+$string['declining'] = 'Declining';
+$string['stable'] = 'Stable';
+$string['latestprediction'] = 'Latest prediction';
+$string['viewallhistory'] = 'View all prediction history';
+$string['predictionnote'] = 'Note: This prediction is based on your current activity and performance in this course.';
+$string['clicktorefresh'] = 'Click to refresh your prediction';
+$string['predictionrefreshed'] = 'Your prediction has been refreshed';
+$string['nopredicitiontext'] = 'No prediction available yet. Click the button below to generate your first prediction.';
+$string['predictionnewuser'] = 'Welcome! Generate your first prediction to see how you\'re doing in this course.';
+
+// Task-related strings
+$string['activetrainingmodels'] = 'Models currently in training';
+$string['scheduledtasks'] = 'Scheduled training tasks';
+$string['traininglogs'] = 'Training logs';
+$string['modelid'] = 'Model ID';
+$string['event'] = 'Event';
+$string['level'] = 'Level';
+$string['pending'] = 'Pending';
+$string['datasetfilenotfound'] = 'Dataset file not found on the server. Please try uploading the dataset again.';
+$string['invalidmodeldata'] = 'Invalid model data structure';
+
+// Task monitor and time-related strings
+$string['modelscurrentlyintraining'] = 'Models currently in training';
+$string['notrainingmodels'] = 'No models are currently being trained';
+$string['traininglogs'] = 'Training logs';
+$string['notraininglogs'] = 'No training logs found';
+$string['scheduledtasks'] = 'Scheduled tasks';
+$string['pendingstatus'] = 'Pending...';
+$string['trainingstatus'] = 'Training...';
+$string['modelid'] = 'Model ID';
+$string['taskid'] = 'Task ID';
+$string['logmessage'] = 'Message';
+$string['notasks'] = 'No tasks found';
+$string['timecreated'] = 'Time created';
+$string['timemodified'] = 'Time modified';
+$string['nextruntime'] = 'Next run time';
+$string['lastruntime'] = 'Last run time';
+
+// Model management actions
+$string['deletemodel'] = 'Delete model';
+$string['confirmmodeldelete'] = 'Are you sure you want to delete the model "{$a}"? This will also delete all predictions made with this model.';
+$string['modeldeleted'] = 'Model deleted successfully';
+$string['purgefailedmodels'] = 'Purge failed models';
+$string['confirmpurgefailed'] = 'Are you sure you want to delete all failed models? This cannot be undone.';
+$string['failedmodelsdeleted'] = 'Failed models deleted successfully';
+$string['nomodels'] = 'No models found';
+$string['allmodels'] = 'All models';
+$string['failedmodels'] = 'Failed models';
+$string['nofailedmodels'] = 'No failed models found to purge';
+
+// Dataset properties table
+$string['datasetproperty'] = 'Property';
+$string['datasetvalue'] = 'Value';
+
+$string['complete'] = 'Complete';
+$string['datasetfilenotfound'] = 'Dataset file not found';
+
+// Risk student lists
+$string['highrisk_students'] = 'High risk students';
+$string['mediumrisk_students'] = 'Medium risk students';
+$string['lowrisk_students'] = 'Low risk students';
+$string['riskfactors'] = 'Risk factors';
+$string['nostudentsintherisk'] = 'No students in this risk category.';
+
+// Risk factors
+$string['nofactorsavailable'] = 'No specific factors available for this prediction.';
+$string['factor_low_activity'] = 'Very low course activity';
+$string['factor_medium_activity'] = 'Below average course activity';
+$string['factor_high_activity'] = 'High level of course activity';
+$string['factor_low_submissions'] = 'Few or no assignment submissions';
+$string['factor_medium_submissions'] = 'Some assignments not submitted';
+$string['factor_high_submissions'] = 'All assignments submitted on time';
+$string['factor_low_grades'] = 'Low grades on submitted work';
+$string['factor_medium_grades'] = 'Average grades on assessments';
+$string['factor_high_grades'] = 'Good grades on assessments';
+$string['factor_not_logged_in'] = 'Has not logged in for {$a} days';
+$string['factor_few_days_since_login'] = 'Last logged in {$a} days ago';
+$string['factor_recent_login'] = 'Recently active in the course';
+$string['factor_few_modules_accessed'] = 'Has accessed very few course materials';
+$string['factor_some_modules_accessed'] = 'Has accessed some but not all materials';
+$string['factor_many_modules_accessed'] = 'Has accessed most course materials';
+$string['factor_general_high_risk'] = 'Multiple risk factors detected';
+$string['factor_general_medium_risk'] = 'Some engagement issues detected';
+$string['factor_general_low_risk'] = 'Good overall engagement pattern';
+
+// Admin dashboard
+$string['courseswithpredictions'] = 'Courses with predictions';
+$string['highrisk_students_allcourses'] = 'High risk students across all courses';
+$string['viewingcoursestudents'] = 'Viewing students from course: {$a}';
+$string['viewallcourses'] = 'View all courses';
+$string['viewcourse'] = 'View course';
+$string['nocourseswitmodels'] = 'No courses with active prediction models found. Train a model first.';
+$string['hidden'] = 'Hidden';
+$string['nostudentsintherisk'] = 'No students in this risk category.';
+$string['student'] = 'Student';
+
+// Model details
+$string['potentialoverfitting'] = 'Potential overfitting detected. The model performs much better on training data than testing data.';
+$string['crossvalidation'] = 'Cross-validation accuracy: {$a}%';
+$string['modelaccuracydetail'] = 'Accuracy: {$a->accuracy}% (Cross-validation: {$a->cv_accuracy}%)';
+$string['topfeatures'] = 'Top Important Features';
+
+$string['metrics_precision'] = 'Precision';
+$string['metrics_recall'] = 'Recall';
+$string['metrics_f1'] = 'F1 Score';
+$string['metrics_roc_auc'] = 'ROC AUC';
+$string['metrics_overfitting_ratio'] = 'Overfitting Ratio';
+$string['metrics_cv_accuracy'] = 'Cross-validation Accuracy';
+$string['metrics_cv_std'] = 'Cross-validation Std. Dev.';
+$string['feature_importance'] = 'Feature Importance';
+
+$string['modeldetails'] = 'Model Details';
+$string['trainstatus'] = 'Training Status';
+$string['viewdetails'] = 'View Details';
+
+// Add these new strings at the end of the language file
+$string['suggestion_course_specific'] = 'in your {$a->coursename} course';
+$string['suggestion_for_course'] = 'for your {$a->coursename} course';
+$string['courseselectorlabel'] = 'Select course to view';
+$string['multiplecoursesavailable'] = 'Multiple courses available';
+$string['nocourseselected'] = 'No course selected';
+$string['viewperformancein'] = 'View performance in';
+$string['generalstudy'] = 'General study recommendation';
+
+{{!
+    @template block_studentperformancepredictor/admin_dashboard
+
+    Admin dashboard template
+}}
+
+<section class="block_studentperformancepredictor admin-dashboard" data-course-id="{{courseid}}">
+    <h4 class="spp-heading">{{heading}}</h4>
+
+    <div class="spp-admin-controls mb-4">
+        <a href="{{managemodelsurl}}" class="btn btn-primary">
+            {{#str}}managemodels, block_studentperformancepredictor{{/str}}
+        </a>
+        <a href="{{managedatasetsurl}}" class="btn btn-secondary">
+            {{#str}}managedatasets, block_studentperformancepredictor{{/str}}
+        </a>
+        <a href="{{refreshpredictionsurl}}" class="btn btn-secondary">
+            {{#str}}refreshpredictions, block_studentperformancepredictor{{/str}}
+        </a>
+    </div>
+
+    {{^hasmodel}}
+        <div class="alert alert-warning" role="alert">
+            {{{nomodeltext}}}
+        </div>
+    {{/hasmodel}}
+
+    {{#hasmodel}}
+        <div class="spp-course-overview">
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="spp-stats">
+                        <div class="spp-stat-total">
+                            <span class="spp-label">{{#str}}totalstudents, block_studentperformancepredictor{{/str}}</span>
+                            <span class="spp-value">{{totalstudents}}</span>
+                        </div>
+                        <div class="spp-risk-distribution">
+                            <div class="spp-risk-high">
+                                <span class="spp-label">{{#str}}highrisk_label, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{highrisk}} ({{highriskpercent}}%)</span>
+                            </div>
+                            <div class="spp-risk-medium">
+                                <span class="spp-label">{{#str}}mediumrisk_label, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{mediumrisk}} ({{mediumriskpercent}}%)</span>
+                            </div>
+                            <div class="spp-risk-low">
+                                <span class="spp-label">{{#str}}lowrisk_label, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{lowrisk}} ({{lowriskpercent}}%)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="spp-student-risk-sections mt-4">
+                {{! High Risk Students }}
+                <div class="card mb-3 spp-risk-card spp-risk-high-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="fa fa-exclamation-triangle mr-2"></i>
+                            {{#str}}highrisk_students, block_studentperformancepredictor{{/str}} ({{highrisk}})
+                        </h5>
+                    </div>
+                    <div id="highRiskStudents">
+                        <div class="card-body p-0">
+                            {{#has_highrisk_students}}
+                                <div class="table-responsive">
+                                    <table class="table table-hover table-striped mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>{{#str}}student, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}passingchance, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}riskfactors, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}actions, block_studentperformancepredictor{{/str}}</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {{#students_highrisk}}
+                                                <tr>
+                                                    <td>
+                                                        <div class="d-flex align-items-center">
+                                                            {{#picture}}
+                                                                <img src="{{picture}}" alt="{{fullname}}" class="rounded-circle mr-2" width="35" height="35">
+                                                            {{/picture}}
+                                                            <a href="{{profileurl}}">{{fullname}}</a>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <span class="badge badge-danger">{{passprob}}%</span>
+                                                    </td>
+                                                    <td>
+                                                        <ul class="list-unstyled mb-0">
+                                                            {{#risk_factors}}
+                                                                <li><i class="fa fa-times-circle text-danger mr-1"></i> {{.}}</li>
+                                                            {{/risk_factors}}
+                                                        </ul>
+                                                    </td>
+                                                    <td>
+                                                        {{#suggestions.length}}
+                                                            <ul class="list-unstyled mb-0 small">
+                                                                {{#suggestions}}
+                                                                    <li><i class="fa fa-info-circle text-info mr-1"></i> {{text}}</li>
+                                                                {{/suggestions}}
+                                                            </ul>
+                                                        {{/suggestions.length}}
+                                                        {{^suggestions.length}}
+                                                            <span class="text-muted small">{{#str}}nosuggestions, block_studentperformancepredictor{{/str}}</span>
+                                                        {{/suggestions.length}}
+                                                    </td>
+                                                    <td>
+                                                        <a href="{{generate_url}}" class="btn btn-sm btn-info">
+                                                            {{#str}}updateprediction, block_studentperformancepredictor{{/str}}
+                                                        </a>
+                                                    </td>
+                                                </tr>
+                                            {{/students_highrisk}}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            {{/has_highrisk_students}}
+                            {{^has_highrisk_students}}
+                                <div class="card-body">
+                                    <p class="text-muted mb-0">{{#str}}nostudentsintherisk, block_studentperformancepredictor{{/str}}</p>
+                                </div>
+                            {{/has_highrisk_students}}
+                        </div>
+                    </div>
+                </div>
+
+                {{! Medium Risk Students }}
+                <div class="card mb-3 spp-risk-card spp-risk-medium-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="fa fa-exclamation-circle mr-2"></i>
+                            {{#str}}mediumrisk_students, block_studentperformancepredictor{{/str}} ({{mediumrisk}})
+                        </h5>
+                    </div>
+                    <div id="mediumRiskStudents">
+                        <div class="card-body p-0">
+                            {{#has_mediumrisk_students}}
+                                <div class="table-responsive">
+                                    <table class="table table-hover table-striped mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>{{#str}}student, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}passingchance, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}riskfactors, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}actions, block_studentperformancepredictor{{/str}}</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {{#students_mediumrisk}}
+                                                <tr>
+                                                    <td>
+                                                        <div class="d-flex align-items-center">
+                                                            {{#picture}}
+                                                                <img src="{{picture}}" alt="{{fullname}}" class="rounded-circle mr-2" width="35" height="35">
+                                                            {{/picture}}
+                                                            <a href="{{profileurl}}">{{fullname}}</a>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <span class="badge badge-warning">{{passprob}}%</span>
+                                                    </td>
+                                                    <td>
+                                                        <ul class="list-unstyled mb-0">
+                                                            {{#risk_factors}}
+                                                                <li><i class="fa fa-exclamation-circle text-warning mr-1"></i> {{.}}</li>
+                                                            {{/risk_factors}}
+                                                        </ul>
+                                                    </td>
+                                                    <td>
+                                                        {{#suggestions.length}}
+                                                            <ul class="list-unstyled mb-0 small">
+                                                                {{#suggestions}}
+                                                                    <li><i class="fa fa-info-circle text-info mr-1"></i> {{text}}</li>
+                                                                {{/suggestions}}
+                                                            </ul>
+                                                        {{/suggestions.length}}
+                                                        {{^suggestions.length}}
+                                                            <span class="text-muted small">{{#str}}nosuggestions, block_studentperformancepredictor{{/str}}</span>
+                                                        {{/suggestions.length}}
+                                                    </td>
+                                                    <td>
+                                                        <a href="{{generate_url}}" class="btn btn-sm btn-info">
+                                                            {{#str}}updateprediction, block_studentperformancepredictor{{/str}}
+                                                        </a>
+                                                    </td>
+                                                </tr>
+                                            {{/students_mediumrisk}}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            {{/has_mediumrisk_students}}
+                            {{^has_mediumrisk_students}}
+                                <div class="card-body">
+                                    <p class="text-muted mb-0">{{#str}}nostudentsintherisk, block_studentperformancepredictor{{/str}}</p>
+                                </div>
+                            {{/has_mediumrisk_students}}
+                        </div>
+                    </div>
+                </div>
+
+                {{! Low Risk Students }}
+                <div class="card mb-3 spp-risk-card spp-risk-low-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="fa fa-check-circle mr-2"></i>
+                            {{#str}}lowrisk_students, block_studentperformancepredictor{{/str}} ({{lowrisk}})
+                        </h5>
+                    </div>
+                    <div id="lowRiskStudents">
+                        <div class="card-body p-0">
+                            {{#has_lowrisk_students}}
+                                <div class="table-responsive">
+                                    <table class="table table-hover table-striped mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>{{#str}}student, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}passingchance, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}riskfactors, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}</th>
+                                                <th>{{#str}}actions, block_studentperformancepredictor{{/str}}</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {{#students_lowrisk}}
+                                                <tr>
+                                                    <td>
+                                                        <div class="d-flex align-items-center">
+                                                            {{#picture}}
+                                                                <img src="{{picture}}" alt="{{fullname}}" class="rounded-circle mr-2" width="35" height="35">
+                                                            {{/picture}}
+                                                            <a href="{{profileurl}}">{{fullname}}</a>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <span class="badge badge-success">{{passprob}}%</span>
+                                                    </td>
+                                                    <td>
+                                                        <ul class="list-unstyled mb-0">
+                                                            {{#risk_factors}}
+                                                                <li><i class="fa fa-check-circle text-success mr-1"></i> {{.}}</li>
+                                                            {{/risk_factors}}
+                                                        </ul>
+                                                    </td>
+                                                    <td>
+                                                        {{#suggestions.length}}
+                                                            <ul class="list-unstyled mb-0 small">
+                                                                {{#suggestions}}
+                                                                    <li><i class="fa fa-info-circle text-info mr-1"></i> {{text}}</li>
+                                                                {{/suggestions}}
+                                                            </ul>
+                                                        {{/suggestions.length}}
+                                                        {{^suggestions.length}}
+                                                            <span class="text-muted small">{{#str}}nosuggestions, block_studentperformancepredictor{{/str}}</span>
+                                                        {{/suggestions.length}}
+                                                    </td>
+                                                    <td>
+                                                        <a href="{{generate_url}}" class="btn btn-sm btn-info">
+                                                            {{#str}}updateprediction, block_studentperformancepredictor{{/str}}
+                                                        </a>
+                                                    </td>
+                                                </tr>
+                                            {{/students_lowrisk}}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            {{/has_lowrisk_students}}
+                            {{^has_lowrisk_students}}
+                                <div class="card-body">
+                                    <p class="text-muted mb-0">{{#str}}nostudentsintherisk, block_studentperformancepredictor{{/str}}</p>
+                                </div>
+                            {{/has_lowrisk_students}}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    {{/hasmodel}}
+</section>
+
+{{!
+    @template block_studentperformancepredictor/admin_settings
+
+    Admin settings template
+}}
+
+<section class="block_studentperformancepredictor mb-4" data-course-id="{{courseid}}">
+    <header>
+        <h4 class="spp-heading">{{heading}}</h4>
+    </header>
+
+    <div class="spp-admin-actions mb-3">
+        <div class="btn-group" role="group">
+            <a href="{{managemodelsurl}}" class="btn btn-primary">
+                {{#str}}managemodels, block_studentperformancepredictor{{/str}}
+            </a>
+            <a href="{{managedatasetsurl}}" class="btn btn-secondary">
+                {{#str}}managedatasets, block_studentperformancepredictor{{/str}}
+            </a>
+            <a href="{{refreshpredictionsurl}}" class="btn btn-secondary">
+                {{#str}}refreshpredictions, block_studentperformancepredictor{{/str}}
+            </a>
+        </div>
+    </div>
+
+    {{^hasmodel}}
+        <div class="alert alert-warning" role="alert">
+            {{{nomodeltext}}}
+        </div>
+    {{/hasmodel}}
+
+    {{#hasmodel}}
+        <section class="spp-course-overview">
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="spp-stats">
+                        <div class="spp-stat-total">
+                            <span class="spp-label">{{#str}}totalstudents, block_studentperformancepredictor{{/str}}</span>
+                            <span class="spp-value">{{totalstudents}}</span>
+                        </div>
+                        <div class="spp-risk-distribution">
+                            <div class="spp-risk-high">
+                                <span class="spp-label">{{#str}}highrisk_label, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{highrisk}} ({{highriskpercent}}%)</span>
+                            </div>
+                            <div class="spp-risk-medium">
+                                <span class="spp-label">{{#str}}mediumrisk_label, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{mediumrisk}} ({{mediumriskpercent}}%)</span>
+                            </div>
+                            <div class="spp-risk-low">
+                                <span class="spp-label">{{#str}}lowrisk_label, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{lowrisk}} ({{lowriskpercent}}%)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {{#haschart}}
+                <div class="col-md-6">
+                    <div class="spp-chart-container" aria-label="{{#str}}riskdistribution, block_studentperformancepredictor{{/str}}">
+                        <canvas id="spp-admin-chart" data-chartdata="{{chartdata}}"></canvas>
+                        <noscript>
+                            <div class="alert alert-info mt-2">{{#str}}jsrequired, block_studentperformancepredictor{{/str}}</div>
+                        </noscript>
+                    </div>
+                </div>
+                {{/haschart}}
+            </div>
+        </section>
+    {{/hasmodel}}
+</section>
+
+{{!
+    @template block_studentperformancepredictor/prediction_details
+
+    Prediction details template
+}}
+
+<section class="spp-prediction-details">
+    <div class="spp-prediction-summary">
+        <div class="spp-probability">
+            <span class="spp-label">{{#str}}passingchance, block_studentperformancepredictor{{/str}}</span>
+            <span class="spp-value">{{prediction.passprob}}%</span>
+        </div>
+        <div class="spp-risk {{prediction.riskclass}}">
+            <span class="spp-label">{{#str}}risk, block_studentperformancepredictor{{/str}}</span>
+            <span class="spp-value">{{prediction.risktext}}</span>
+        </div>
+        <div class="spp-update-time">
+            <small>{{#str}}lastupdate, block_studentperformancepredictor, {{prediction.lastupdate}}{{/str}}</small>
+        </div>
+    </div>
+
+    {{#suggestions}}
+    <div class="spp-suggestions mt-3">
+        <h6>{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}</h6>
+        <ul class="list-group" aria-label="{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}">
+            {{#suggestions}}
+            <li class="list-group-item">
+                {{#hasurl}}
+                    <a href="{{url}}" target="_blank" rel="noopener noreferrer">{{name}}</a>:
+                {{/hasurl}}
+                {{^hasurl}}
+                    <span>{{name}}</span>:
+                {{/hasurl}}
+                {{reason}}
+                {{#viewed}}
+                    <span class="badge bg-secondary">{{#str}}viewed, block_studentperformancepredictor{{/str}}</span>
+                {{/viewed}}
+                {{#completed}}
+                    <span class="badge bg-success">{{#str}}completed, block_studentperformancepredictor{{/str}}</span>
+                {{/completed}}
+            </li>
+            {{/suggestions}}
+        </ul>
+    </div>
+    {{/suggestions}}
+    {{^suggestions}}
+    <div class="alert alert-info mt-3">{{#str}}nosuggestions, block_studentperformancepredictor{{/str}}</div>
+    {{/suggestions}}
+</section>
+
+{{!
+    @template block_studentperformancepredictor/student_dashboard
+
+    Student dashboard template
+}}
+
+<section class="block_studentperformancepredictor" data-course-id="{{courseid}}" data-user-id="{{userid}}" aria-label="{{heading}}">
+    <h4 class="spp-heading">{{heading}}</h4>
+
+    {{#showcourseselector}}
+        <div class="spp-course-selector-container mb-3">
+            <div class="spp-course-selector-label mb-1">
+                {{#str}}viewperformancein, block_studentperformancepredictor{{/str}}:
+            </div>
+            {{{courseselector}}}
+        </div>
+    {{/showcourseselector}}
+
+
+    {{^hasmodel}}
+        <div class="alert alert-warning" role="alert">
+            {{{nomodeltext}}}
+        </div>
+    {{/hasmodel}}
+
+    {{#hasmodel}}
+        {{^hasprediction}}
+            <div class="alert alert-info" role="status">
+                {{{nopredictiontext}}}
+            </div>
+
+
+        {{#can_generate_prediction}}
+                <div class="text-center mb-3">
+                    <button type="button" class="btn btn-primary spp-generate-prediction"
+                            data-course-id="{{courseid}}" data-user-id="{{userid}}">
+                        {{#str}}generateprediction, block_studentperformancepredictor{{/str}}
+                    </button>
+                </div>
+            {{/can_generate_prediction}}
+        {{/hasprediction}}
+
+        {{#hasprediction}}
+            <section class="spp-prediction" data-prediction-id="{{predictionid}}">
+                <div class="row">
+                    <div class="col-md-12">
+                        <div class="spp-prediction-stats">
+                            <div class="spp-probability">
+                                <span class="spp-label">{{#str}}passingchance, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{passprob}}%</span>
+                            </div>
+                            <div class="spp-risk {{riskclass}}">
+                                <span class="spp-label">{{#str}}risk, block_studentperformancepredictor{{/str}}</span>
+                                <span class="spp-value">{{risktext}}</span>
+                            </div>
+                            <div class="spp-update-time">
+                                <small>{{#str}}lastupdate, block_studentperformancepredictor, {{lastupdate}}{{/str}}</small>
+                            </div>
+
+                            {{#can_generate_prediction}}
+                                <div class="mt-2">
+                                    <button type="button" class="btn btn-sm btn-secondary spp-update-prediction"
+                                            data-course-id="{{courseid}}" data-user-id="{{userid}}">
+                                        {{#str}}updateprediction, block_studentperformancepredictor{{/str}}
+                                    </button>
+                                </div>
+                            {{/can_generate_prediction}}
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            {{#showimprovements}}
+                {{#has_historical}}
+                    <section class="spp-improvements mt-3">
+                    <h5>{{#str}}performancehistory, block_studentperformancepredictor{{/str}}</h5>
+                    <div class="spp-improvements-chart">
+                         <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>{{#str}}date, core{{/str}}</th>
+                                    <th>{{#str}}passingchance, block_studentperformancepredictor{{/str}}</th>
+                                    <th>{{#str}}risk, block_studentperformancepredictor{{/str}}</th>
+                                 </tr>
+                            </thead>
+                            <tbody>
+                                 {{#historical}}
+                                    <tr>
+                                    <td>{{date}}</td>
+                                    <td>{{passprob}}%</td>
+                                    <td><span class="{{riskclass}}">{{risktext}}</span></td>
+                                 </tr>
+                                 {{/historical}}
+                            </tbody>
+                         </table>
+                    </div>
+                   </section>
+                {{/has_historical}}
+            {{/showimprovements}}
+
+            <section>
+            {{#hassuggestions}}
+                <div class="spp-suggestions">
+                    <h5>{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}</h5>
+                    <div class="list-group spp-suggestions-list" aria-label="{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}">
+                         {{#suggestions}}
+                            <div class="list-group-item spp-suggestion" data-id="{{id}}">
+                                 <div class="spp-suggestion-content">
+                                    {{#hasurl}}
+                                        <h6><a href="{{url}}" target="_blank" rel="noopener noreferrer">{{name}}</a></h6>
+                                     {{/hasurl}}
+                                    {{^hasurl}}
+                                        <h6>{{name}}</h6>
+                                    {{/hasurl}}
+                                    <p>{{reason}}</p>
+                                    <div class="spp-suggestion-actions">
+                                        {{^viewed}}
+                                            <button
+                                            class="btn btn-sm btn-outline-secondary spp-mark-viewed" data-id="{{id}}">
+                                                {{#str}}markasviewed, block_studentperformancepredictor{{/str}}
+                                            </button>
+                                                   {{/viewed}}
+
+                                        {{#viewed}}
+                                           <span class="badge bg-secondary">{{#str}}viewed, block_studentperformancepredictor{{/str}}</span>
+                                           {{/viewed}}
+                                           {{^completed}}
+                                            <button class="btn btn-sm btn-outline-primary spp-mark-completed" data-id="{{id}}">
+                                                {{#str}}markascompleted, block_studentperformancepredictor{{/str}}
+                                            </button>
+                                         {{/completed}}
+                                         {{#completed}}
+                                            <span class="badge bg-success">{{#str}}completed, block_studentperformancepredictor{{/str}}</span>
+                                          {{/completed}}
+                                     </div>
+                                 </div>
+                       </div>
+                         {{/suggestions}}
+                    </div>
+                </div>
+            {{/hassuggestions}}
+            {{^hassuggestions}}
+                 <div class="alert alert-info mt-3">{{#str}}nosuggestions, block_studentperformancepredictor{{/str}}</div>
+            {{/hassuggestions}}
+            </section>
+        {{/hasprediction}}
+    {{/hasmodel}}
+</section>
+
+{{!
+    @template block_studentperformancepredictor/teacher_dashboard
+    Teacher and Admin dashboard template for the block view.
+}}
+
+<section class="block_studentperformancepredictor" data-course-id="{{courseid}}">
+    <h4 class="spp-heading">{{heading}}</h4>
+
+    {{#showcourseselector}}
+        <div class="spp-course-selector-container mb-3">
+            <div class="spp-course-selector-label mb-1">
+                {{#str}}viewperformancein, block_studentperformancepredictor{{/str}}:
+            </div>
+            {{{courseselectorhtml}}}
+        </div>
+        <h5 class="spp-subheading text-muted mb-3">{{coursename}}</h5>
+    {{/showcourseselector}}
+
+    <div class="spp-teacher-actions mt-3 mb-3">
+        <a href="{{managemodelsurl}}" class="btn btn-primary" rel="noopener noreferrer">
+            {{#str}}managemodels, block_studentperformancepredictor{{/str}}
+        </a>
+        <a href="{{managedatasetsurl}}" class="btn btn-secondary" rel="noopener noreferrer">
+            {{#str}}managedatasets, block_studentperformancepredictor{{/str}}
+        </a>
+        <a href="{{refreshpredictionsurl}}" class="btn btn-info" rel="noopener noreferrer">
+            {{#str}}refreshpredictions, block_studentperformancepredictor{{/str}}
+        </a>
+    </div>
+
+    {{^hasmodel}}
+        <div class="alert alert-warning" role="alert">
+            {{{nomodeltext}}}
+        </div>
+    {{/hasmodel}}
+
+    {{#hasmodel}}
+        <div class="spp-course-overview">
+            <div class="spp-stats">
+                <div class="spp-stat-total">
+                    <span class="spp-label">{{#str}}totalstudents, block_studentperformancepredictor{{/str}}</span>
+                    <span class="spp-value">{{totalstudents}}</span>
+                </div>
+                <div class="spp-risk-distribution">
+                    <div class="spp-risk-high">
+                        <span class="spp-label">{{#str}}highrisk_label, block_studentperformancepredictor{{/str}}</span>
+                        <span class="spp-value">{{highrisk}} ({{highriskpercent}}%)</span>
+                    </div>
+                    <div class="spp-risk-medium">
+                        <span class="spp-label">{{#str}}mediumrisk_label, block_studentperformancepredictor{{/str}}</span>
+                        <span class="spp-value">{{mediumrisk}} ({{mediumriskpercent}}%)</span>
+                    </div>
+                    <div class="spp-risk-low">
+                        <span class="spp-label">{{#str}}lowrisk_label, block_studentperformancepredictor{{/str}}</span>
+                        <span class="spp-value">{{lowrisk}} ({{lowriskpercent}}%)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="spp-student-risk-sections mt-4">
+                {{#has_highrisk_students}}
+                    <h6>{{#str}}highrisk_students, block_studentperformancepredictor{{/str}}</h6>
+                    <ul class="list-group mb-3">
+                        {{#students_highrisk}}
+                            <li class="list-group-item">
+                                <a href="{{profileurl}}">{{fullname}}</a> - <span class="badge badge-danger">{{passprob}}%</span>
+                                <div class="text-muted small mt-1">
+                                    <strong>{{#str}}riskfactors, block_studentperformancepredictor{{/str}}:</strong>
+                                    {{#risk_factors}}
+                                        {{.}}
+                                    {{/risk_factors}}
+                                </div>
+                                {{#suggestions.length}}
+                                <div class="text-muted small mt-1">
+                                    <strong>{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}:</strong>
+                                    <ul class="list-unstyled mb-0">
+                                    {{#suggestions}}
+                                        <li><i class="fa fa-info-circle text-info mr-1"></i> {{text}}</li>
+                                    {{/suggestions}}
+                                    </ul>
+                                </div>
+                                {{/suggestions.length}}
+                            </li>
+                        {{/students_highrisk}}
+                    </ul>
+                {{/has_highrisk_students}}
+
+                {{#has_mediumrisk_students}}
+                    <h6>{{#str}}mediumrisk_students, block_studentperformancepredictor{{/str}}</h6>
+                    <ul class="list-group mb-3">
+                        {{#students_mediumrisk}}
+                            <li class="list-group-item">
+                                <a href="{{profileurl}}">{{fullname}}</a> - <span class="badge badge-warning">{{passprob}}%</span>
+                                <div class="text-muted small mt-1">
+                                    <strong>{{#str}}riskfactors, block_studentperformancepredictor{{/str}}:</strong>
+                                    {{#risk_factors}}
+                                        {{.}}
+                                    {{/risk_factors}}
+                                </div>
+                                {{#suggestions.length}}
+                                <div class="text-muted small mt-1">
+                                    <strong>{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}:</strong>
+                                    <ul class="list-unstyled mb-0">
+                                    {{#suggestions}}
+                                        <li><i class="fa fa-info-circle text-info mr-1"></i> {{text}}</li>
+                                    {{/suggestions}}
+                                    </ul>
+                                </div>
+                                {{/suggestions.length}}
+                            </li>
+                        {{/students_mediumrisk}}
+                    </ul>
+                {{/has_mediumrisk_students}}
+
+                {{#has_lowrisk_students}}
+                    <h6>{{#str}}lowrisk_students, block_studentperformancepredictor{{/str}}</h6>
+                    <ul class="list-group mb-3">
+                        {{#students_lowrisk}}
+                            <li class="list-group-item">
+                                <a href="{{profileurl}}">{{fullname}}</a> - <span class="badge badge-success">{{passprob}}%</span>
+                                <div class="text-muted small mt-1">
+                                    <strong>{{#str}}riskfactors, block_studentperformancepredictor{{/str}}:</strong>
+                                    {{#risk_factors}}
+                                        {{.}}
+                                    {{/risk_factors}}
+                                </div>
+                                {{#suggestions.length}}
+                                <div class="text-muted small mt-1">
+                                    <strong>{{#str}}suggestedactivities, block_studentperformancepredictor{{/str}}:</strong>
+                                    <ul class="list-unstyled mb-0">
+                                    {{#suggestions}}
+                                        <li><i class="fa fa-info-circle text-info mr-1"></i> {{text}}</li>
+                                    {{/suggestions}}
+                                    </ul>
+                                </div>
+                                {{/suggestions.length}}
+                            </li>
+                        {{/students_lowrisk}}
+                    </ul>
+                {{/has_lowrisk_students}}
+            </div>
+        </div>
+    {{/hasmodel}}
+</section>
+
+<?php
+// blocks/studentperformancepredictor/block_studentperformancepredictor.php
+
+defined('MOODLE_INTERNAL') || die();
+require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
+
+class block_studentperformancepredictor extends block_base {
+    public function init() {
+        $this->title = get_string('pluginname', 'block_studentperformancepredictor');
+    }
+
+    public function instance_allow_multiple() {
+        return false;
+    }
+
+    public function applicable_formats() {
+        return array(
+            'site' => false,
+            'my' => true,
+            'course' => true,
+        );
+    }
+
+    protected function render_course_selector($courses, $currentcourse = 0) {
+        global $OUTPUT;
+
+        $options = array();
+        foreach ($courses as $course) {
+            $options[$course->id] = format_string($course->fullname);
+        }
+        
+        $url = new moodle_url($this->page->url);
+        $select = new \single_select($url, 'spp_course', $options, $currentcourse, null);
+        $select->set_label(get_string('courseselectorlabel', 'block_studentperformancepredictor'),
+            ['class' => 'accesshide']);
+        $select->class = 'spp-course-selector';
+        $select->formid = 'spp-course-selector-form';
+
+        return $OUTPUT->render($select);
+    }
+
+    public function get_content() {
+        global $USER, $COURSE, $OUTPUT, $PAGE, $DB, $CFG;
+
+        // The check for $this->content has been removed to prevent caching,
+        // which was causing the sesskey to become invalid on page reloads.
+
+        $this->content = new stdClass();
+        $this->content->text = '';
+        $this->content->footer = '';
+
+        $courseid = 0;
+        $viewable_courses = [];
+        $showcourseselector = false;
+        $courseselectorhtml = '';
+        
+        $selected_course_param = optional_param('spp_course', 0, PARAM_INT);
+
+        // Determine context and available courses.
+        if ($PAGE->pagetype === 'my-index' || $PAGE->context->contextlevel === CONTEXT_USER) {
+            // We are on the dashboard.
+            $mycourses = enrol_get_my_courses(null, 'fullname ASC');
+            
+            foreach ($mycourses as $course) {
+                if ($course->id == SITEID) continue;
+                $context_check = context_course::instance($course->id);
+                
+                if (has_capability('block/studentperformancepredictor:view', $context_check)) {
+                    $viewable_courses[$course->id] = $course;
+                }
+            }
+            
+            if (count($viewable_courses) > 0) {
+                $showcourseselector = true;
+                if ($selected_course_param && isset($viewable_courses[$selected_course_param])) {
+                    $courseid = $selected_course_param;
+                } else {
+                    $firstcourse = reset($viewable_courses);
+                    $courseid = $firstcourse->id;
+                }
+                $courseselectorhtml = $this->render_course_selector($viewable_courses, $courseid);
+            }
+
+        } else if ($PAGE->context->contextlevel === CONTEXT_COURSE) {
+            // We are on a specific course page.
+            $courseid = $PAGE->course->id;
+        }
+
+        if (empty($courseid) || $courseid == SITEID) {
+            $this->content->text = $OUTPUT->notification(get_string('nocoursesfound', 'block_studentperformancepredictor'), 'info');
+            return $this->content;
+        }
+        
+        $coursecontext = context_course::instance($courseid);
+
+        try {
+            $canviewown = has_capability('block/studentperformancepredictor:view', $coursecontext);
+            $canviewall = has_capability('block/studentperformancepredictor:viewallpredictions', $coursecontext);
+            $canmanage = has_capability('block/studentperformancepredictor:managemodels', $coursecontext);
+
+            if ($canmanage || $canviewall) { // Admin or Teacher view
+                $renderer = $PAGE->get_renderer('block_studentperformancepredictor');
+                $teacherview = new \block_studentperformancepredictor\output\teacher_view($courseid, $showcourseselector, $courseselectorhtml);
+                $this->content->text = $renderer->render_teacher_view($teacherview);
+            } else if ($canviewown) { // Student view
+                $renderer = $PAGE->get_renderer('block_studentperformancepredictor');
+                $studentview = new \block_studentperformancepredictor\output\student_view($courseid, $USER->id, $showcourseselector, $courseselectorhtml);
+                $this->content->text = $renderer->render_student_view($studentview);
+            } else {
+                $this->content->text = ''; // Don't show anything if no permissions.
+            }
+        } catch (Exception $e) {
+            debugging('Error rendering Student Performance Predictor block: ' . $e->getMessage(), DEBUG_DEVELOPER);
+            $this->content->text = $OUTPUT->notification(get_string('errorrendingblock', 'block_studentperformancepredictor'), 'error');
+        }
+
+        return $this->content;
+    }
+
+    public function specialization() {
+        if (isset($this->config->title)) {
+            $this->title = $this->config->title;
+        }
+    }
+}
+
+<?php
+// blocks/studentperformancepredictor/generate_prediction.php
+
+require_once('../../config.php');
+require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
+
+// Get courseid as an optional parameter first to ensure the variable is always defined.
+$courseid = optional_param('courseid', 0, PARAM_INT);
+
+try {
+    // Manually check for the required courseid. If it's missing, Moodle will throw a standard error.
+    if (!$courseid) {
+        throw new moodle_exception('missingparam', 'error', '', 'courseid');
+    }
+
+    $userid = optional_param('userid', $USER->id, PARAM_INT); // Default to current user
+
+    // Set up page and context for permission checks
+    $course = get_course($courseid);
+    $context = context_course::instance($courseid);
+
+    // Security checks
+    require_login($course);
+    require_sesskey();
+
+    // Capability checks
+    if ($USER->id == $userid) {
+        require_capability('block/studentperformancepredictor:view', $context);
+    } else {
+        require_capability('block/studentperformancepredictor:viewallpredictions', $context);
+    }
+
+    // Generate a new prediction by calling the library function
+    $prediction = block_studentperformancepredictor_generate_new_prediction($courseid, $userid);
+
+    if ($prediction) {
+        $redirecturl = new moodle_url('/course/view.php', ['id' => $courseid]);
+        // After successfully generating the prediction, redirect the user back with a success message.
+        redirect($redirecturl, get_string('predictiongenerated', 'block_studentperformancepredictor'), 2, \core\output\notification::NOTIFY_SUCCESS);
+    } else {
+        // The generate_new_prediction function returned false
+        throw new moodle_exception('predictionerror', 'block_studentperformancepredictor');
+    }
+
+} catch (Exception $e) {
+    // If any exception occurs, redirect with an error message.
+    // This safely handles the redirect and prevents the "mutated session" error.
+    $redirecturl = $courseid ? new moodle_url('/course/view.php', ['id' => $courseid]) : new moodle_url('/my/');
+    redirect($redirecturl, $e->getMessage(), 5, \core\output\notification::NOTIFY_ERROR);
+}
+
+<?php
+// blocks/studentperformancepredictor/lib.php
+
+defined('MOODLE_INTERNAL') || die();
+
+/**
+ * Creates and ensures the dataset directory exists for a course.
+ *
+ * @param int $courseid Course ID
+ * @return string Path to dataset directory
+ * @throws moodle_exception If directory creation fails
+ */
+function block_studentperformancepredictor_ensure_dataset_directory($courseid) {
+    global $CFG;
+
+    // Create course-specific dataset directory with proper Windows compatibility
+    $basedir = $CFG->dataroot . DIRECTORY_SEPARATOR . 'blocks_studentperformancepredictor';
+    $coursedir = $basedir . DIRECTORY_SEPARATOR . 'course_' . $courseid;
+    $datasetsdir = $coursedir . DIRECTORY_SEPARATOR . 'datasets';
+
+    // Create directories with proper permissions for Windows/XAMPP
+    foreach ([$basedir, $coursedir, $datasetsdir] as $dir) {
+        if (!file_exists($dir)) {
+            if (!mkdir($dir, 0777, true)) {
+                throw new \moodle_exception('directorycreateerror', 'block_studentperformancepredictor', '', $dir);
+            }
+            // Explicitly set permissions for XAMPP
+            @chmod($dir, 0777);
+        }
+
+        // Check if directory is writable
+        if (!is_writable($dir)) {
+            // Try to make it writable for XAMPP
+            @chmod($dir, 0777);
+            if (!is_writable($dir)) {
+                // Try a different approach using is_dir to check if it exists first
+                if (is_dir($dir)) {
+                    @chmod($dir, 0777);
+
+                    // Create a test file to check write permissions
+                    $testfile = $dir . DIRECTORY_SEPARATOR . 'test_write.txt';
+                    $success = @file_put_contents($testfile, 'test');
+                    if ($success) {
+                        @unlink($testfile);
+                    } else {
+                        throw new \moodle_exception('directorynotwritable', 'block_studentperformancepredictor', '', $dir);
+                    }
+                } else {
+                    throw new \moodle_exception('directorynotwritable', 'block_studentperformancepredictor', '', $dir);
+                }
+            }
+        }
+    }
+
+    return $datasetsdir;
+}
+
+/**
+ * Creates and ensures the models directory exists for a course.
+ *
+ * @param int $courseid Course ID
+ * @return string Path to models directory
+ * @throws moodle_exception If directory creation fails
+ */
+function block_studentperformancepredictor_ensure_models_directory($courseid) {
+    global $CFG;
+
+    // Create course-specific models directory with proper Windows compatibility
+    $basedir = $CFG->dataroot . DIRECTORY_SEPARATOR . 'blocks_studentperformancepredictor';
+    $coursedir = $basedir . DIRECTORY_SEPARATOR . 'course_' . $courseid;
+    $modelsdir = $coursedir . DIRECTORY_SEPARATOR . 'models';
+
+    // Create directories with proper permissions for Windows/XAMPP
+    foreach ([$basedir, $coursedir, $modelsdir] as $dir) {
+        if (!file_exists($dir)) {
+            if (!mkdir($dir, 0777, true)) {
+                throw new \moodle_exception('directorycreateerror', 'block_studentperformancepredictor', '', $dir);
+            }
+            // Explicitly set permissions for XAMPP
+            @chmod($dir, 0777);
+        }
+
+        // Check if directory is writable
+        if (!is_writable($dir)) {
+            // Try to make it writable for XAMPP
+            @chmod($dir, 0777);
+            if (!is_writable($dir)) {
+                // Try a different approach using is_dir to check if it exists first
+                if (is_dir($dir)) {
+                    @chmod($dir, 0777);
+
+                    // Create a test file to check write permissions
+                    $testfile = $dir . DIRECTORY_SEPARATOR . 'test_write.txt';
+                    $success = @file_put_contents($testfile, 'test');
+                    if ($success) {
+                        @unlink($testfile);
+                    } else {
+                        throw new \moodle_exception('directorynotwritable', 'block_studentperformancepredictor', '', $dir);
+                    }
+                } else {
+                    throw new \moodle_exception('directorynotwritable', 'block_studentperformancepredictor', '', $dir);
+                }
+            }
+        }
+    }
+
+    return $modelsdir;
+}
+
+/**
+ * Check if the course has an active model.
+ *
+ * @param int $courseid Course ID
+ * @return bool True if there is an active model
+ */
+function block_studentperformancepredictor_has_active_model($courseid) {
+    global $DB;
+
+    // First check for a course-specific model
+    if ($DB->record_exists('block_spp_models', array('courseid' => $courseid, 'active' => 1, 'trainstatus' => 'complete'))) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Get the student's prediction for a course.
+ *
+ * @param int $courseid Course ID
+ * @param int $userid User ID
+ * @return object|bool Prediction object or false if not found
+ */
+function block_studentperformancepredictor_get_student_prediction($courseid, $userid) {
+    global $DB;
+
+    // First try to get course-specific prediction
+    $prediction = $DB->get_record_sql(
+        "SELECT p.* FROM {block_spp_predictions} p 
+         JOIN {block_spp_models} m ON p.modelid = m.id 
+         WHERE p.courseid = ? 
+         AND p.userid = ? 
+         AND m.active = 1 
+         AND m.courseid = ?
+         ORDER BY p.timemodified DESC 
+         LIMIT 1",
+        array($courseid, $userid, $courseid)
+    );
+
+    return $prediction;
+}
+
+/**
+ * Get risk statistics for the course.
+ *
+ * @param int $courseid Course ID
+ * @return object Risk statistics
+ */
+function block_studentperformancepredictor_get_course_risk_stats($courseid) {
+    global $DB;
+
+    $stats = new stdClass();
+    $stats->total = 0;
+    $stats->highrisk = 0;
+    $stats->mediumrisk = 0;
+    $stats->lowrisk = 0;
+
+    // Get risk distribution from course-specific predictions first
+    $sql = "SELECT p.riskvalue, COUNT(DISTINCT p.userid) as count
+            FROM {block_spp_predictions} p
+            JOIN {block_spp_models} m ON p.modelid = m.id
+            WHERE p.courseid = :courseid
+            AND m.active = 1
+            AND (m.courseid = :courseid2)
+            GROUP BY p.riskvalue";
+
+    $results = $DB->get_records_sql($sql, array('courseid' => $courseid, 'courseid2' => $courseid));
+
+    // Convert risk values to readable form
+    foreach ($results as $result) {
+        $stats->total += $result->count;
+        if ($result->riskvalue == 1) {
+            $stats->lowrisk = $result->count;
+        } else if ($result->riskvalue == 2) {
+            $stats->mediumrisk = $result->count;
+        } else if ($result->riskvalue == 3) {
+            $stats->highrisk = $result->count;
+        }
+    }
+
+    // If no predictions found, get total enrolled students
+    if ($stats->total == 0) {
+        $context = context_course::instance($courseid);
+        $stats->total = count_enrolled_users($context, 'moodle/course:isincompletionreports');
+    }
+
+    return $stats;
+}
+
+/**
+ * Get suggestions for a prediction.
+ *
+ * @param int $predictionid Prediction ID
+ * @return array Suggestions
+ */
+function block_studentperformancepredictor_get_suggestions($predictionid) {
+    global $DB;
+
+    // Get suggestions for this prediction
+    $sql = "SELECT s.*, cm.id as cmid, mm.name as modulename
+            FROM {block_spp_suggestions} s
+            LEFT JOIN {course_modules} cm ON s.cmid = cm.id
+            LEFT JOIN {modules} mm ON cm.module = mm.id
+            WHERE s.predictionid = :predictionid
+            ORDER BY s.priority DESC";
+
+    $suggestions = $DB->get_records_sql($sql, array('predictionid' => $predictionid));
+
+    // Add course module name for each suggestion that has a course module
+    foreach ($suggestions as $suggestion) {
+        if (!empty($suggestion->cmid) && !empty($suggestion->modulename) && !empty($suggestion->resourceid)) {
+            // Get the module instance name from the appropriate module table
+            $module_table = $suggestion->modulename;
+            $record = $DB->get_record($module_table, ['id' => $suggestion->resourceid], 'name');
+            if ($record && !empty($record->name)) {
+                $suggestion->cmname = $record->name;
+            } else {
+                $suggestion->cmname = $suggestion->modulename;
+            }
+        } else {
+            $suggestion->cmname = get_string('generalstudy', 'block_studentperformancepredictor');
+        }
+    }
+
+    return $suggestions;
+}
+
+/**
+ * Get risk text based on risk value.
+ *
+ * @param int $riskvalue Risk value (1-3)
+ * @return string Risk text
+ */
+function block_studentperformancepredictor_get_risk_text($riskvalue) {
+    switch ($riskvalue) {
+        case 1:
+            return get_string('lowrisk_label', 'block_studentperformancepredictor');
+        case 2:
+            return get_string('mediumrisk_label', 'block_studentperformancepredictor');
+        case 3:
+            return get_string('highrisk_label', 'block_studentperformancepredictor');
+        default:
+            return get_string('unknownrisk', 'block_studentperformancepredictor');
+    }
+}
+
+/**
+ * Get risk CSS class based on risk value.
+ *
+ * @param int $riskvalue Risk value (1-3)
+ * @return string CSS class
+ */
+function block_studentperformancepredictor_get_risk_class($riskvalue) {
+    switch ($riskvalue) {
+        case 1:
+            return 'spp-risk-low';
+        case 2:
+            return 'spp-risk-medium';
+        case 3:
+            return 'spp-risk-high';
+        default:
+            return 'spp-risk-unknown';
+    }
+}
+
+/**
+ * Mark a suggestion as viewed.
+ *
+ * @param int $suggestionid Suggestion ID
+ * @return bool Success
+ */
+function block_studentperformancepredictor_mark_suggestion_viewed($suggestionid) {
+    global $DB;
+
+    $suggestion = $DB->get_record('block_spp_suggestions', array('id' => $suggestionid));
+    if (!$suggestion) {
+        return false;
+    }
+
+    $suggestion->viewed = 1;
+    return $DB->update_record('block_spp_suggestions', $suggestion);
+}
+
+/**
+ * Mark a suggestion as completed.
+ *
+ * @param int $suggestionid Suggestion ID
+ * @return bool Success
+ */
+function block_studentperformancepredictor_mark_suggestion_completed($suggestionid) {
+    global $DB;
+
+    $suggestion = $DB->get_record('block_spp_suggestions', array('id' => $suggestionid));
+    if (!$suggestion) {
+        return false;
+    }
+
+    $suggestion->completed = 1;
+    $suggestion->viewed = 1; // Also mark as viewed
+    return $DB->update_record('block_spp_suggestions', $suggestion);
+}
+
+/**
+ * Trigger prediction refresh for a course.
+ *
+ * @param int $courseid Course ID
+ * @param int $userid User ID requesting the refresh (optional)
+ * @return bool Success
+ */
+function block_studentperformancepredictor_trigger_prediction_refresh($courseid, $userid = null) {
+    global $USER;
+
+    // Use current user if not specified
+    if ($userid === null) {
+        $userid = $USER->id;
+    }
+
+    // Create adhoc task
+    $task = new \block_studentperformancepredictor\task\refresh_predictions();
+    $task->set_custom_data([
+        'courseid' => $courseid,
+        'userid' => $userid
+    ]);
+
+    // Queue task with high priority
+    return \core\task\manager::queue_adhoc_task($task, true);
+}
+
+/**
+ * Executes the prediction refresh for a course immediately.
+ * NOTE: This is a synchronous operation and can be slow for courses with many students.
+ * It is called directly by the AJAX request to bypass issues with the ad-hoc task queue.
+ *
+ * @param int $courseid The course ID.
+ * @return array An array with success, errors, and total counts.
+ */
+function block_studentperformancepredictor_execute_prediction_refresh_now($courseid) {
+    global $DB;
+
+    // Ignore user aborts and set a higher time limit to prevent timeouts.
+    @ignore_user_abort(true);
+    @set_time_limit(300); // 5 minutes
+
+    $context = \context_course::instance($courseid);
+    $students = get_enrolled_users($context, 'moodle/course:isincompletionreports');
+
+    $result = [
+        'success' => 0,
+        'errors' => 0,
+        'total' => count($students)
+    ];
+
+    if (empty($students)) {
+        set_config('lastrefresh_' . $courseid, time(), 'block_studentperformancepredictor');
+        return $result;
+    }
+
+    foreach ($students as $student) {
+        try {
+            $predictionid = block_studentperformancepredictor_generate_prediction($courseid, $student->id);
+            if ($predictionid) {
+                $result['success']++;
+            } else {
+                $result['errors']++;
+            }
+        } catch (\Exception $e) {
+            debugging('Error generating prediction for student ' . $student->id . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+            $result['errors']++;
+        }
+    }
+
+    set_config('lastrefresh_' . $courseid, time(), 'block_studentperformancepredictor');
+    return $result;
+}
+
+/**
+ * Call the Python backend API with improved error handling.
+ *
+ * @param string $endpoint API endpoint
+ * @param array $data Data to send
+ * @return array|bool Response data or false on failure
+ */
+function block_studentperformancepredictor_call_backend_api($endpoint, $data) {
+    // Get API settings
+    $apiurl = get_config('block_studentperformancepredictor', 'python_api_url');
+    if (empty($apiurl)) {
+        $apiurl = 'http://localhost:5000';
+    }
+
+    // Ensure URL ends with the endpoint
+    if (!empty($endpoint)) {
+        if ($endpoint[0] == '/') {
+            $endpoint = substr($endpoint, 1);
+        }
+        $apiurl = rtrim($apiurl, '/') . '/' . $endpoint;
+    }
+
+    $apikey = get_config('block_studentperformancepredictor', 'python_api_key');
+    if (empty($apikey)) {
+        $apikey = 'changeme';
+    }
+
+    // Initialize curl with better error handling
+    $curl = new \curl();
+    $options = [
+        'CURLOPT_TIMEOUT' => 300,
+        'CURLOPT_RETURNTRANSFER' => true,
+        'CURLOPT_HTTPHEADER' => [
+            'Content-Type: application/json',
+            'X-API-Key: ' . $apikey
+        ],
+        // Add these for Windows XAMPP compatibility
+        'CURLOPT_SSL_VERIFYHOST' => 0,
+        'CURLOPT_SSL_VERIFYPEER' => 0
+    ];
+
+    $debug = get_config('block_studentperformancepredictor', 'enabledebug');
+    if ($debug) {
+        debugging('Calling backend API: ' . $apiurl . ' with data: ' . json_encode($data), DEBUG_DEVELOPER);
+    }
+
+    try {
+        // Add a retry mechanism for better reliability
+        $maxRetries = 2;
+        $retryCount = 0;
+        $response = null;
+        $httpcode = 0;
+
+        while ($retryCount <= $maxRetries) {
+            $response = $curl->post($apiurl, json_encode($data), $options);
+            $httpcode = $curl->get_info()['http_code'] ?? 0;
+
+            if ($httpcode >= 200 && $httpcode < 300) {
+                // Success
+                break;
+            }
+
+            // Retry on server errors (5xx) but not on client errors (4xx)
+            if ($httpcode < 500 || $retryCount >= $maxRetries) {
+                break;
+            }
+
+            $retryCount++;
+            if ($debug) {
+                debugging("Retrying API call after error (attempt $retryCount/$maxRetries)", DEBUG_DEVELOPER);
+            }
+
+            // Wait before retrying
+            sleep(1);
+        }
+
+        if ($debug) {
+            debugging('Backend API response code: ' . $httpcode, DEBUG_DEVELOPER);
+            debugging('Backend API response: ' . substr($response, 0, 1000) . (strlen($response) > 1000 ? '...' : ''), DEBUG_DEVELOPER);
+        }
+
+        if ($httpcode < 200 || $httpcode >= 300) {
+             if ($httpcode == 404) {
+                throw new \moodle_exception('predictionfailed', 'block_studentperformancepredictor', '', 'The prediction model was not found on the backend service. Please try retraining the model.');
+            }
+            if ($debug) {
+                debugging('Backend API error: HTTP ' . $httpcode . ' - ' . $response, DEBUG_DEVELOPER);
+            }
+            return false;
+        }
+
+        $responseData = json_decode($response, true);
+        if (!is_array($responseData)) {
+            if ($debug) {
+                debugging('Invalid response format from backend: ' . substr($response, 0, 200), DEBUG_DEVELOPER);
+            }
+            return false;
+        }
+
+        return $responseData;
+    } catch (\Exception $e) {
+        debugging('Backend API error: ' . $e->getMessage(), DEBUG_DEVELOPER);
+        throw $e;
+    }
+}
+
+/**
+ * Handle backend API errors consistently.
+ * * @param string $error Error message
+ * @param string $endpoint API endpoint that failed
+ * @param array $data Request data (will be sanitized)
+ * @return string Formatted error message
+ */
+function block_studentperformancepredictor_handle_api_error($error, $endpoint, $data = null) {
+    global $CFG;
+
+    // Log the error
+    $debug = get_config('block_studentperformancepredictor', 'enabledebug');
+    $apiurl = get_config('block_studentperformancepredictor', 'python_api_url');
+
+    // Build a detailed error message for admins/debugging
+    $detailed_msg = "ML Backend API Error: $error\n";
+    $detailed_msg .= "Endpoint: " . ($apiurl ? rtrim($apiurl, '/') . '/' . ltrim($endpoint, '/') : $endpoint) . "\n";
+
+    if ($data && $debug) {
+        // Sanitize sensitive data
+        $sanitized_data = $data;
+        if (isset($sanitized_data['api_key'])) {
+            $sanitized_data['api_key'] = '***hidden***';
+        }
+        $detailed_msg .= "Data: " . json_encode($sanitized_data) . "\n";
+    }
+
+    // Add troubleshooting tips
+    $detailed_msg .= "\nTroubleshooting:\n";
+    $detailed_msg .= "1. Check if the ML backend is running and accessible\n";
+    $detailed_msg .= "2. Verify the API URL is correct in plugin settings\n";
+    $detailed_msg .= "3. Ensure the API keys match between Moodle and the ML backend\n";
+    $detailed_msg .= "4. Check the ML backend logs for more details\n";
+
+    // Add link to test backend page
+    $detailed_msg .= "\nTest your backend connection: " . 
+        $CFG->wwwroot . '/blocks/studentperformancepredictor/admin/testbackend.php';
+
+    // Log detailed message for debugging
+    debugging($detailed_msg, DEBUG_DEVELOPER);
+
+    // Return a user-friendly message
+    return get_string('backendconnectionerror', 'block_studentperformancepredictor');
+}
+
+/**
+ * Train a model via the Python backend.
+ *
+ * @param int $courseid Course ID (0 for global model)
+ * @param int $datasetid Dataset ID
+ * @param string $algorithm Algorithm to use (optional)
+ * @return int|bool Model ID or false on failure
+ */
+function block_studentperformancepredictor_train_model_via_backend($courseid, $datasetid, $algorithm = null) {
+    global $DB, $USER;
+
+    try {
+        // Get dataset information
+        $dataset = $DB->get_record('block_spp_datasets', ['id' => $datasetid], '*', MUST_EXIST);
+
+        // Check if dataset file exists
+        if (!file_exists($dataset->filepath)) {
+            debugging('Dataset file not found: ' . $dataset->filepath, DEBUG_DEVELOPER);
+            throw new \moodle_exception('datasetfilenotfound', 'block_studentperformancepredictor');
+        }
+
+        // Get API settings
+        $apiurl = get_config('block_studentperformancepredictor', 'python_api_url');
+        if (empty($apiurl)) {
+            $apiurl = 'http://localhost:5000';
+        }
+        $apiurl = rtrim($apiurl, '/') . '/train';
+
+        $apikey = get_config('block_studentperformancepredictor', 'python_api_key');
+        if (empty($apikey)) {
+            $apikey = 'changeme';
+        }
+
+        // Create CURLFile for file upload
+        $cfile = new \CURLFile(
+            $dataset->filepath,
+            'text/' . $dataset->fileformat,
+            basename($dataset->filepath)
+        );
+
+        // Prepare multipart form data
+        $postfields = [
+            'courseid' => $courseid,
+            'algorithm' => $algorithm ?: 'randomforest',
+            'dataset_file' => $cfile,
+        ];
+
+        $debug = get_config('block_studentperformancepredictor', 'enabledebug');
+        if ($debug) {
+            debugging('Sending training request to: ' . $apiurl, DEBUG_DEVELOPER);
+            debugging('Course ID: ' . $courseid . ', Algorithm: ' . ($algorithm ?: 'randomforest'), DEBUG_DEVELOPER);
+            debugging('File path: ' . $dataset->filepath, DEBUG_DEVELOPER);
+        }
+
+        // Use curl directly for more control over file uploads
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $apiurl);
+        curl_setopt($ch, CURLOPT_POST, 1);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $postfields);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'X-API-Key: ' . $apikey
+        ]);
+
+        // Add these options for XAMPP/Windows compatibility
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+
+        // Increase timeout for large files and training
+        curl_setopt($ch, CURLOPT_TIMEOUT, 300); // 5 minutes
+
+        $response = curl_exec($ch);
+        $httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        if (curl_errno($ch)) {
+            $error = curl_error($ch);
+            curl_close($ch);
+            throw new \moodle_exception('trainingfailed', 'block_studentperformancepredictor', '', 
+                                       'CURL error: ' . $error);
+        }
+
+        curl_close($ch);
+
+        if ($debug) {
+            debugging('Backend API response code: ' . $httpcode, DEBUG_DEVELOPER);
+            debugging('Backend API response: ' . substr($response, 0, 1000) . 
+                     (strlen($response) > 1000 ? '...' : ''), DEBUG_DEVELOPER);
+        }
+
+        if ($httpcode !== 200) {
+            throw new \moodle_exception('trainingfailed', 'block_studentperformancepredictor', '', 
+                                       'HTTP error ' . $httpcode . ': ' . $response);
+        }
+
+        $responseData = json_decode($response, true);
+        if (!is_array($responseData) || !isset($responseData['model_id'])) {
+            throw new \moodle_exception('trainingfailed', 'block_studentperformancepredictor', '', 
+                                       'Invalid response from backend: ' . $response);
+        }
+
+        // Check if there's an existing model in training/pending state for this course, dataset, and algorithm
+        $params = [
+            'courseid' => $courseid,
+            'datasetid' => $datasetid,
+            'algorithmtype' => $algorithm ?: 'randomforest',
+            'status1' => 'pending',
+            'status2' => 'training'
+        ];
+
+        $existingModelSql = "SELECT id FROM {block_spp_models} 
+                             WHERE courseid = :courseid 
+                             AND datasetid = :datasetid 
+                             AND algorithmtype = :algorithmtype 
+                             AND (trainstatus = :status1 OR trainstatus = :status2)
+                             ORDER BY id DESC LIMIT 1";
+
+        $existingModel = $DB->get_record_sql($existingModelSql, $params);
+
+        // Prepare model data from the response
+        $modelData = [
+            'modelid' => $responseData['model_id'],
+            'modelpath' => $responseData['model_path'] ?? null,
+            'algorithmtype' => $responseData['algorithm'],
+            'featureslist' => isset($responseData['feature_names']) ? json_encode($responseData['feature_names']) : '[]',
+            'accuracy' => $responseData['metrics']['accuracy'] ?? 0,
+            'metrics' => isset($responseData['metrics']) ? json_encode($responseData['metrics']) : null,
+            'trainstatus' => 'complete',
+            'timemodified' => time(),
+            'usermodified' => $USER->id
+        ];
+
+        if ($existingModel) {
+            // Update the existing model
+            $model = $DB->get_record('block_spp_models', ['id' => $existingModel->id]);
+
+            foreach ($modelData as $key => $value) {
+                $model->$key = $value;
+            }
+
+            // Keep the original name
+            if (strpos($model->modelname, ' - ') === false) {
+                // If the model doesn't have a timestamp, add one
+                $model->modelname = ucfirst($responseData['algorithm']) . ' Model - ' . date('Y-m-d H:i');
+            }
+
+            $DB->update_record('block_spp_models', $model);
+            $model_db_id = $model->id;
+
+            if ($debug) {
+                debugging('Updated existing model record: ' . $model_db_id, DEBUG_DEVELOPER);
+            }
+        } else {
+            // Create a new record (shouldn't normally happen, but just in case)
+            $model = new \stdClass();
+            $model->courseid = $courseid;
+            $model->datasetid = $datasetid;
+            $model->modelname = ucfirst($responseData['algorithm']) . ' Model - ' . date('Y-m-d H:i');
+            $model->active = 0; // Not active by default
+            $model->timecreated = time();
+
+            foreach ($modelData as $key => $value) {
+                $model->$key = $value;
+            }
+
+            $model_db_id = $DB->insert_record('block_spp_models', $model);
+
+            if ($debug) {
+                debugging('Created new model record: ' . $model_db_id, DEBUG_DEVELOPER);
+            }
+        }
+
+        return $model_db_id;
+
+    } catch (\Exception $e) {
+        debugging('Error training model: ' . $e->getMessage(), DEBUG_DEVELOPER);
+
+        // If we have model info but there was an error, mark it as failed
+        if (isset($existingModel) && $existingModel) {
+            $model = $DB->get_record('block_spp_models', ['id' => $existingModel->id]);
+            if ($model) {
+                $model->trainstatus = 'failed';
+                $model->errormessage = $e->getMessage();
+                $model->timemodified = time();
+                $DB->update_record('block_spp_models', $model);
+
+                if ($debug) {
+                    debugging('Marked existing model as failed: ' . $existingModel->id, DEBUG_DEVELOPER);
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
+/**
+ * Generate a prediction using the backend API.
+ *
+ * @param int $courseid Course ID
+ * @param int $userid User ID
+ * @return object|bool Prediction object or false
+ */
+function block_studentperformancepredictor_generate_prediction_via_backend($courseid, $userid) {
+    global $DB, $CFG;
+
+    try {
+        // Get active model for this course
+        $model = $DB->get_record('block_spp_models', ['courseid' => $courseid, 'active' => 1, 'trainstatus' => 'complete']);
+
+        if (!$model || empty($model->modelid)) {
+            throw new \moodle_exception('noactivemodel', 'block_studentperformancepredictor');
+        }
+
+        // Get student data
+        require_once($CFG->dirroot . '/course/lib.php');
+        require_once($CFG->libdir . '/gradelib.php');
+
+        // Gather student features from Moodle data
+        $features = [];
+
+        // Basic user data
+        $user = $DB->get_record('user', ['id' => $userid], 'id, firstname, lastname, email, lastaccess, firstaccess');
+        $features['user_id'] = $userid;
+        $features['days_since_last_access'] = (time() - max(1, $user->lastaccess)) / 86400; // Convert to days
+        $features['days_since_first_access'] = (time() - max(1, $user->firstaccess)) / 86400;
+
+        // Activity level - count of logs in the past week
+        $sql = "SELECT COUNT(*) FROM {logstore_standard_log} 
+                WHERE userid = :userid AND courseid = :courseid 
+                AND timecreated > :weekago";
+        $features['activity_level'] = $DB->count_records_sql($sql, [
+            'userid' => $userid,
+            'courseid' => $courseid,
+            'weekago' => time() - 7*24*60*60
+        ]);
+
+        // Assignment submission count
+        $sql = "SELECT COUNT(*) FROM {assign_submission} sub
+                JOIN {assign} a ON sub.assignment = a.id
+                WHERE sub.userid = :userid AND a.course = :courseid AND sub.status = 'submitted'";
+        $features['submission_count'] = $DB->count_records_sql($sql, [
+            'userid' => $userid, 
+            'courseid' => $courseid
+        ]);
+
+        // Course module access count
+        $sql = "SELECT COUNT(DISTINCT contextinstanceid) FROM {logstore_standard_log}
+                WHERE userid = :userid AND courseid = :courseid AND action = 'viewed' AND target = 'course_module'";
+        $features['modules_accessed'] = $DB->count_records_sql($sql, [
+            'userid' => $userid,
+            'courseid' => $courseid
+        ]);
+
+        // Forum activity
+        $sql = "SELECT COUNT(*) FROM {forum_posts} fp
+                JOIN {forum_discussions} fd ON fp.discussion = fd.id
+                JOIN {forum} f ON fd.forum = f.id
+                WHERE fp.userid = :userid AND f.course = :courseid";
+        $features['forum_posts'] = $DB->count_records_sql($sql, [
+            'userid' => $userid,
+            'courseid' => $courseid
+        ]);
+
+        // Current grade
+        $features['current_grade'] = 0;
+        $features['current_grade_percentage'] = 0;
+        
+        if (function_exists('grade_get_course_grade')) {
+            try {
+                $grade = grade_get_course_grade($userid, $courseid);
+                if ($grade && isset($grade->grade) && $grade->grade !== null) {
+                    $features['current_grade'] = $grade->grade;
+                    if (isset($grade->grade_item->grademax) && $grade->grade_item->grademax > 0) {
+                        $features['current_grade_percentage'] = ($grade->grade / $grade->grade_item->grademax) * 100;
+                    }
+                }
+            } catch (\Exception $e) {
+                debugging('Could not fetch course grade for user ' . $userid . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+            }
+        }
+
+        // Call the backend API for prediction
+        $payload = [
+            'model_id' => $model->modelid,
+            'features' => $features
+        ];
+
+        $response = block_studentperformancepredictor_call_backend_api('predict', $payload);
+
+        if (!$response || !isset($response['prediction']) || !isset($response['probability'])) {
+            throw new \moodle_exception('predictionfailed', 'block_studentperformancepredictor');
+        }
+
+        // Determine risk level based on pass probability
+        $passprob = $response['probability'];
+
+        // Get risk thresholds from settings
+        $lowrisk = get_config('block_studentperformancepredictor', 'lowrisk');
+        if (empty($lowrisk) || !is_numeric($lowrisk)) {
+            $lowrisk = 0.7; // Default
+        }
+
+        $mediumrisk = get_config('block_studentperformancepredictor', 'mediumrisk');
+        if (empty($mediumrisk) || !is_numeric($mediumrisk)) {
+            $mediumrisk = 0.4; // Default
+        }
+
+        if ($passprob >= $lowrisk) {
+            $riskvalue = 1; // Low risk
+        } else if ($passprob >= $mediumrisk) {
+            $riskvalue = 2; // Medium risk
+        } else {
+            $riskvalue = 3; // High risk
+        }
+
+        // Save prediction to database
+        $prediction = new \stdClass();
+        $prediction->modelid = $model->id;
+        $prediction->courseid = $courseid;
+        $prediction->userid = $userid;
+        $prediction->passprob = $passprob;
+        $prediction->riskvalue = $riskvalue;
+        $prediction->predictiondata = json_encode($response);
+        $prediction->timecreated = time();
+        $prediction->timemodified = time();
+
+        $predictionid = $DB->insert_record('block_spp_predictions', $prediction);
+
+        // Get the inserted prediction
+        $prediction = $DB->get_record('block_spp_predictions', ['id' => $predictionid]);
+
+        // Generate suggestions based on the prediction
+        block_studentperformancepredictor_generate_suggestions($prediction);
+
+        return $prediction;
+
+    } catch (\Exception $e) {
+        debugging('Error generating prediction: ' . $e->getMessage(), DEBUG_DEVELOPER);
+        return false;
+    }
+}
+
+
+/**
+ * Generate a prediction for a student.
+ *
+ * @param int $courseid Course ID
+ * @param int $userid User ID
+ * @return int|bool Prediction ID or false on failure
+ */
+function block_studentperformancepredictor_generate_prediction($courseid, $userid) {
+    // Use the backend-driven prediction system
+    $prediction = block_studentperformancepredictor_generate_prediction_via_backend($courseid, $userid);
+
+    if ($prediction) {
+        return $prediction->id;
+    }
+
+    return false;
+}
+
+/**
+ * Trigger prediction generation adhoc task based on user role.
+ *
+ * @param int $courseid Course ID
+ * @param int $userid User ID (optional, for specific student)
+ * @param int $requestorid User ID of the person requesting the prediction (optional)
+ * @return bool Success
+ */
+function block_studentperformancepredictor_trigger_prediction_task($courseid, $userid = null, $requestorid = null) {
+    global $USER, $DB;
+
+    // If no requestor specified, use current user
+    if ($requestorid === null) {
+        $requestorid = $USER->id;
+    }
+
+    // Prepare task data
+    $taskdata = [
+        'courseid' => $courseid,
+        'requestor' => $requestorid
+    ];
+
+    // If a specific userid is provided, add it to the task data
+    if ($userid !== null) {
+        $taskdata['userid'] = $userid;
+    }
+
+    // Create adhoc task
+    $task = new \block_studentperformancepredictor\task\adhoc_prediction_refresh();
+    $task->set_custom_data((object)$taskdata);
+
+    // Queue task with high priority
+    \core\task\manager::queue_adhoc_task($task, true);
+
+    // Update last request time
+    if (!$userid) {
+        // If this is a bulk request, update the last refresh timestamp
+        set_config('lastrefresh_requested_' . $courseid, time(), 'block_studentperformancepredictor');
+    }
+
+    return true;
+}
+
+/**
+ * Generate a new prediction for a student on demand.
+ * This function is called when a student clicks the prediction button.
+ *
+ * @param int $courseid Course ID
+ * @param int $userid User ID
+ * @return object|bool Prediction object or false on failure
+ */
+function block_studentperformancepredictor_generate_new_prediction($courseid, $userid) {
+    global $DB, $USER;
+
+    try {
+        // First check if there is an active model
+        if (!block_studentperformancepredictor_has_active_model($courseid)) {
+            throw new \moodle_exception('noactivemodel', 'block_studentperformancepredictor');
+        }
+
+        // Check permissions based on who is requesting the prediction
+        $context = context_course::instance($courseid);
+
+        if ($USER->id == $userid) {
+            // Student generating their own prediction - permission already checked in calling code
+            $prediction = block_studentperformancepredictor_generate_prediction_via_backend($courseid, $userid);
+        } else if (has_capability('block/studentperformancepredictor:viewallpredictions', $context)) {
+            // Teacher/admin generating prediction for a student
+            // Check if the student is enrolled in this course
+            if (!is_enrolled($context, $userid)) {
+                throw new \moodle_exception('studentnotenrolled', 'block_studentperformancepredictor');
+            }
+
+            // Queue prediction task and return existing prediction in the meantime
+            block_studentperformancepredictor_trigger_prediction_task($courseid, $userid, $USER->id);
+
+            // Return current prediction if exists, or generate a new one immediately
+            $prediction = $DB->get_record_sql(
+                "SELECT p.* FROM {block_spp_predictions} p
+                 JOIN {block_spp_models} m ON p.modelid = m.id
+                 WHERE p.courseid = ? AND p.userid = ? AND m.active = 1
+                 ORDER BY p.timemodified DESC LIMIT 1",
+                [$courseid, $userid]
+            );
+
+            if (!$prediction) {
+                // No existing prediction, generate one now
+                $prediction = block_studentperformancepredictor_generate_prediction_via_backend($courseid, $userid);
+            }
+        } else {
+            throw new \moodle_exception('nopermission', 'error');
+        }
+
+        if (!$prediction) {
+            throw new \moodle_exception('predictionfailed', 'block_studentperformancepredictor');
+        }
+
+        // Log the action
+        $event = \core\event\notification_viewed::create([
+            'contextid' => context_course::instance($courseid)->id,
+            'objectid' => $prediction->id,
+            'other' => [
+                'type' => 'new_prediction',
+                'courseid' => $courseid
+            ]
+        ]);
+        $event->trigger();
+
+        return $prediction;
+    } catch (Exception $e) {
+        debugging('Error generating new prediction: ' . $e->getMessage(), DEBUG_DEVELOPER);
+        return false;
+    }
+}
+
+/**
+ * Generate suggestions for a student based on their prediction.
+ *
+ * @param object $prediction Prediction object
+ * @return array Array of suggestion IDs
+ */
+function block_studentperformancepredictor_generate_suggestions($prediction) {
+    global $DB;
+
+    // Get course context
+    $context = \context_course::instance($prediction->courseid);
+    $course = get_course($prediction->courseid);
+
+    // Get available course modules
+    $modinfo = get_fast_modinfo($prediction->courseid);
+    $cms = $modinfo->get_cms();
+
+    // Get completion info
+    $completion = new \completion_info($course);
+
+    // Get grades for course activities
+    $grades = \grade_get_grades($prediction->courseid, 'mod', null, null, $prediction->userid);
+
+    // Generate suggestions based on risk level
+    $suggestions = [];
+    $risk_level = $prediction->riskvalue;
+
+    // Check for overdue assignments
+    $overdueAssignments = [];
+    $upcomingAssignments = [];
+    $missedQuizzes = [];
+    $lowGradeActivities = [];
+
+    foreach ($cms as $cm) {
+        // Skip invisible modules or labels
+        if (!$cm->uservisible || $cm->modname == 'label') {
+            continue;
+        }
+
+        // Check if activity is completed
+        $completion_data = $completion->get_data($cm, false, $prediction->userid);
+        $is_completed = isset($completion_data->completionstate) && 
+                        $completion_data->completionstate == COMPLETION_COMPLETE;
+
+        if (!$is_completed) {
+            // Process by module type for targeted suggestions
+            switch ($cm->modname) {
+                case 'assign':
+                    // Get assignment details
+                    $assignment = $DB->get_record('assign', ['id' => $cm->instance]);
+                    if ($assignment) {
+                        if ($assignment->duedate > 0) {
+                            if ($assignment->duedate < time()) {
+                                // Overdue assignment
+                                $overdueAssignments[] = [
+                                    'cm' => $cm,
+                                    'instance' => $assignment,
+                                    'daysoverdue' => floor((time() - $assignment->duedate) / 86400),
+                                    'priority' => 10 // High priority
+                                ];
+                            } else if ($assignment->duedate < (time() + 7*86400)) {
+                                // Assignment due within next week
+                                $upcomingAssignments[] = [
+                                    'cm' => $cm,
+                                    'instance' => $assignment,
+                                    'daysuntildue' => floor(($assignment->duedate - time()) / 86400),
+                                    'priority' => 8 // Medium-high priority
+                                ];
+                            }
+                        }
+                    }
+                    break;
+
+                case 'quiz':
+                    // Get quiz details
+                    $quiz = $DB->get_record('quiz', ['id' => $cm->instance]);
+                    if ($quiz) {
+                        if ($quiz->timeclose > 0 && $quiz->timeclose < time()) {
+                            // Missed quiz
+                            $missedQuizzes[] = [
+                                'cm' => $cm,
+                                'instance' => $quiz,
+                                'daysmissed' => floor((time() - $quiz->timeclose) / 86400),
+                                'priority' => 7 // Medium priority
+                            ];
+                        } else if (!$quiz->timeclose || $quiz->timeclose > time()) {
+                            // Available quiz
+                            $attempts = $DB->count_records('quiz_attempts', [
+                                'quiz' => $quiz->id,
+                                'userid' => $prediction->userid,
+                                'state' => 'finished'
+                            ]);
+
+                            if ($attempts == 0) {
+                                // Never attempted quiz
+                                $missedQuizzes[] = [
+                                    'cm' => $cm,
+                                    'instance' => $quiz,
+                                    'priority' => 9 // High priority if never attempted
+                                ];
+                            }
+                        }
+                    }
+                    break;
+
+                case 'forum':
+                    // Check forum participation
+                    $posts = $DB->count_records_sql(
+                        "SELECT COUNT(*) FROM {forum_posts} fp
+                         JOIN {forum_discussions} fd ON fp.discussion = fd.id
+                         WHERE fd.forum = ? AND fp.userid = ?",
+                        [$cm->instance, $prediction->userid]
+                    );
+
+                    if ($posts == 0) {
+                        // No participation in forum
+                        $lowGradeActivities[] = [
+                            'cm' => $cm,
+                            'priority' => $risk_level >= 2 ? 6 : 4 // Higher priority for higher risk
+                        ];
+                    }
+                    break;
+
+                default:
+                    // General incomplete activity
+                    $lowGradeActivities[] = [
+                        'cm' => $cm,
+                        'priority' => 3 // Lower priority
+                    ];
+                    break;
+            }
+
+            // Check grades for this activity if available
+            if (isset($grades->items) && !empty($grades->items)) {
+                foreach ($grades->items as $grade_item) {
+                    if ($grade_item->iteminstance == $cm->instance && $grade_item->itemmodule == $cm->modname) {
+                        if (isset($grade_item->grades[$prediction->userid]) && 
+                            $grade_item->grades[$prediction->userid]->grade !== null) {
+
+                            $grade = $grade_item->grades[$prediction->userid]->grade;
+                            $grademax = $grade_item->grademax;
+
+                            if ($grademax > 0 && ($grade / $grademax) < 0.6) {
+                                // Low grade (less than 60%)
+                                $lowGradeActivities[] = [
+                                    'cm' => $cm,
+                                    'grade' => $grade,
+                                    'grademax' => $grademax,
+                                    'percentage' => round(($grade / $grademax) * 100),
+                                    'priority' => 7 // Medium-high priority for low grades
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Now create the actual suggestions based on what we found, starting with highest priority items
+
+    // 1. Overdue assignments (highest priority)
+    foreach ($overdueAssignments as $item) {
+        $suggestion = new \stdClass();
+        $suggestion->predictionid = $prediction->id;
+        $suggestion->courseid = $prediction->courseid;
+        $suggestion->userid = $prediction->userid;
+        $suggestion->cmid = $item['cm']->id;
+        $suggestion->resourcetype = 'assign';
+        $suggestion->resourceid = $item['cm']->instance;
+        $suggestion->priority = $item['priority'] + ($risk_level - 1); // Adjust priority based on risk
+
+        // Customize reason based on days overdue
+        if ($item['daysoverdue'] > 7) {
+            $suggestion->reason = get_string('suggestion_assign_overdue_urgent', 'block_studentperformancepredictor', 
+                ['days' => $item['daysoverdue'], 'name' => $item['cm']->name, 'coursename' => $course->fullname]);
+        } else {
+            $suggestion->reason = get_string('suggestion_assign_overdue', 'block_studentperformancepredictor', 
+                ['days' => $item['daysoverdue'], 'name' => $item['cm']->name, 'coursename' => $course->fullname]);
+        }
+
+        $suggestion->timecreated = time();
+        $suggestion->viewed = 0;
+        $suggestion->completed = 0;
+
+        $suggestions[] = $DB->insert_record('block_spp_suggestions', $suggestion);
+    }
+
+    // 2. Upcoming assignments (high priority)
+    foreach ($upcomingAssignments as $item) {
+        $suggestion = new \stdClass();
+        $suggestion->predictionid = $prediction->id;
+        $suggestion->courseid = $prediction->courseid;
+        $suggestion->userid = $prediction->userid;
+        $suggestion->cmid = $item['cm']->id;
+        $suggestion->resourcetype = 'assign';
+        $suggestion->resourceid = $item['cm']->instance;
+        $suggestion->priority = $item['priority'] + ($risk_level - 1); // Adjust priority based on risk
+
+        // Customize reason based on days until due
+        if ($item['daysuntildue'] <= 2) {
+            $suggestion->reason = get_string('suggestion_assign_due_soon', 'block_studentperformancepredictor', 
+                ['days' => $item['daysuntildue'], 'name' => $item['cm']->name, 'coursename' => $course->fullname]);
+        } else {
+            $suggestion->reason = get_string('suggestion_assign_upcoming', 'block_studentperformancepredictor', 
+                ['days' => $item['daysuntildue'], 'name' => $item['cm']->name, 'coursename' => $course->fullname]);
+        }
+
+        $suggestion->timecreated = time();
+        $suggestion->viewed = 0;
+        $suggestion->completed = 0;
+
+        $suggestions[] = $DB->insert_record('block_spp_suggestions', $suggestion);
+    }
+
+    // 3. Missed quizzes (medium-high priority)
+    foreach ($missedQuizzes as $item) {
+        $suggestion = new \stdClass();
+        $suggestion->predictionid = $prediction->id;
+        $suggestion->courseid = $prediction->courseid;
+        $suggestion->userid = $prediction->userid;
+        $suggestion->cmid = $item['cm']->id;
+        $suggestion->resourcetype = 'quiz';
+        $suggestion->resourceid = $item['cm']->instance;
+        $suggestion->priority = $item['priority'] + ($risk_level - 1); // Adjust priority based on risk
+
+        if (isset($item['daysmissed'])) {
+            $suggestion->reason = get_string('suggestion_quiz_missed', 'block_studentperformancepredictor', 
+                ['name' => $item['cm']->name, 'coursename' => $course->fullname]);
+        } else {
+            $suggestion->reason = get_string('suggestion_quiz_not_attempted', 'block_studentperformancepredictor', 
+                ['name' => $item['cm']->name, 'coursename' => $course->fullname]);
+        }
+
+        $suggestion->timecreated = time();
+        $suggestion->viewed = 0;
+        $suggestion->completed = 0;
+
+        $suggestions[] = $DB->insert_record('block_spp_suggestions', $suggestion);
+    }
+
+    // 4. Low grade activities (medium priority)
+    // Limit the number based on risk level to avoid overwhelming the student
+    $maxLowGradeItems = $risk_level == 3 ? 3 : ($risk_level == 2 ? 2 : 1);
+    $lowGradeActivities = array_slice($lowGradeActivities, 0, $maxLowGradeItems);
+
+    foreach ($lowGradeActivities as $item) {
+        $suggestion = new \stdClass();
+        $suggestion->predictionid = $prediction->id;
+        $suggestion->courseid = $prediction->courseid;
+        $suggestion->userid = $prediction->userid;
+        $suggestion->cmid = $item['cm']->id;
+        $suggestion->resourcetype = $item['cm']->modname;
+        $suggestion->resourceid = $item['cm']->instance;
+        $suggestion->priority = $item['priority'] + ($risk_level - 1); // Adjust priority based on risk
+
+        if (isset($item['percentage'])) {
+            // Low grade suggestion
+            $suggestion->reason = get_string('suggestion_improve_grade', 'block_studentperformancepredictor', 
+                ['name' => $item['cm']->name, 'percentage' => $item['percentage'], 
+                 'coursename' => $course->fullname]);
+        } else if ($item['cm']->modname == 'forum') {
+            // Forum participation suggestion
+            $suggestion->reason = get_string('suggestion_forum_participate', 'block_studentperformancepredictor', 
+                ['name' => $item['cm']->name, 'coursename' => $course->fullname]);
+        } else {
+            // Generic activity suggestion
+            $suggestion->reason = get_string('suggestion_complete_activity', 'block_studentperformancepredictor', 
+                ['name' => $item['cm']->name, 'coursename' => $course->fullname]);
+        }
+
+        $suggestion->timecreated = time();
+        $suggestion->viewed = 0;
+        $suggestion->completed = 0;
+
+        $suggestions[] = $DB->insert_record('block_spp_suggestions', $suggestion);
+    }
+
+    // 5. Add general suggestions based on risk level
+    $general_suggestions = [];
+
+    // Add time management suggestion (customize based on risk level)
+    if ($risk_level == 3) {
+        $general_suggestions[] = [
+            'reason' => get_string('suggestion_time_management_urgent', 'block_studentperformancepredictor', 
+                                 ['coursename' => $course->fullname]),
+            'priority' => 5
+        ];
+    } else {
+        $general_suggestions[] = [
+            'reason' => get_string('suggestion_time_management', 'block_studentperformancepredictor', 
+                                 ['coursename' => $course->fullname]),
+            'priority' => 3 + $risk_level
+        ];
+    }
+
+    // Add course-specific engagement suggestions
+    if ($risk_level >= 2) {
+        $general_suggestions[] = [
+            'reason' => get_string('suggestion_engagement_course', 'block_studentperformancepredictor', 
+                                 ['coursename' => $course->fullname]),
+            'priority' => 4 + $risk_level
+        ];
+    }
+
+    // For high risk, suggest contacting the instructor and joining study groups
+    if ($risk_level == 3) {
+        // Find the teacher's name
+        $teacher_name = '';
+        $role = $DB->get_record('role', ['shortname' => 'editingteacher']);
+        if ($role) {
+            $teachers = get_role_users($role->id, $context);
+            if (!empty($teachers)) {
+                $teacher = reset($teachers);
+                $teacher_name = fullname($teacher);
+            }
+        }
+
+        if (!empty($teacher_name)) {
+            $general_suggestions[] = [
+                'reason' => get_string('suggestion_contact_teacher', 'block_studentperformancepredictor', 
+                                     ['teacher' => $teacher_name, 'coursename' => $course->fullname]),
+                'priority' => 8
+            ];
+        } else {
+            $general_suggestions[] = [
+                'reason' => get_string('suggestion_instructor_help', 'block_studentperformancepredictor', 
+                                     ['coursename' => $course->fullname]),
+                'priority' => 8
+            ];
+        }
+
+        $general_suggestions[] = [
+            'reason' => get_string('suggestion_study_group_course', 'block_studentperformancepredictor', 
+                                 ['coursename' => $course->fullname]),
+            'priority' => 7
+        ];
+    }
+
+    // Add general suggestions
+    foreach ($general_suggestions as $gen_suggestion) {
+        $suggestion = new \stdClass();
+        $suggestion->predictionid = $prediction->id;
+        $suggestion->courseid = $prediction->courseid;
+        $suggestion->userid = $prediction->userid;
+        $suggestion->cmid = 0; // No specific module
+        $suggestion->resourcetype = 'general';
+        $suggestion->resourceid = 0;
+        $suggestion->priority = $gen_suggestion['priority'];
+        $suggestion->reason = $gen_suggestion['reason'];
+        $suggestion->timecreated = time();
+        $suggestion->viewed = 0;
+        $suggestion->completed = 0;
+
+        $suggestions[] = $DB->insert_record('block_spp_suggestions', $suggestion);
+    }
+
+    // If we have no suggestions at all, add a generic one
+    if (empty($suggestions)) {
+        $suggestion = new \stdClass();
+        $suggestion->predictionid = $prediction->id;
+        $suggestion->courseid = $prediction->courseid;
+        $suggestion->userid = $prediction->userid;
+        $suggestion->cmid = 0; // No specific module
+        $suggestion->resourcetype = 'general';
+        $suggestion->resourceid = 0;
+        $suggestion->priority = 5;
+        $suggestion->reason = get_string('suggestion_generic', 'block_studentperformancepredictor', 
+                             ['coursename' => $course->fullname]);
+        $suggestion->timecreated = time();
+        $suggestion->viewed = 0;
+        $suggestion->completed = 0;
+
+        $suggestions[] = $DB->insert_record('block_spp_suggestions', $suggestion);
+    }
+
+    return $suggestions;
+}
+
+/**
+ * Refresh predictions for a course via the backend.
+ *
+ * @param int $courseid Course ID
+ * @return array Result statistics
+ */
+function block_studentperformancepredictor_refresh_predictions_via_backend($courseid) {
+    global $DB;
+
+    $context = \context_course::instance($courseid);
+    $students = get_enrolled_users($context, 'moodle/course:isincompletionreports');
+
+    $result = [
+        'success' => 0,
+        'errors' => 0,
+        'total' => count($students)
+    ];
+
+    // Get active model - course model first, then global if enabled
+    $model = $DB->get_record('block_spp_models', ['courseid' => $courseid, 'active' => 1, 'trainstatus' => 'complete']);
+
+    if (!$model) {
+        return $result;
+    }
+
+    // Call backend for each student
+    foreach ($students as $student) {
+        try {
+            $predictionid = block_studentperformancepredictor_generate_prediction($courseid, $student->id);
+            if ($predictionid) {
+                $result['success']++;
+            } else {
+                $result['errors']++;
+            }
+        } catch (Exception $e) {
+            debugging('Error refreshing prediction for student ' . $student->id . ': ' . $e->getMessage(), DEBUG_DEVELOPER);
+            $result['errors']++;
+        }
+    }
+
+    // Update last refresh time
+    set_config('lastrefresh_' . $courseid, time(), 'block_studentperformancepredictor');
+
+    return $result;
+}
+
+<?php
+// blocks/studentperformancepredictor/reports.php
+
+require_once('../../config.php');
+require_once($CFG->dirroot . '/blocks/studentperformancepredictor/lib.php');
+
+// Get parameters
+$courseid = optional_param('courseid', 0, PARAM_INT);
+
+// Set up page context
+$PAGE->set_context(context_system::instance());
+require_login();
+
+$courses_to_display = [];
+
+if (is_siteadmin()) {
+    // Admins can see all courses
+    $allcourses = get_courses();
+    foreach ($allcourses as $course) {
+        if ($course->id != SITEID) {
+            $courses_to_display[$course->id] = $course;
+        }
+    }
+} else {
+    // Teachers only see courses they are enrolled in
+    $mycourses = enrol_get_my_courses(null, 'fullname ASC');
+    foreach ($mycourses as $course) {
+        if ($course->id == SITEID) {
+            continue;
+        }
+        $coursecontext = context_course::instance($course->id);
+        if (has_capability('block/studentperformancepredictor:viewallpredictions', $coursecontext)) {
+            $courses_to_display[$course->id] = $course;
+        }
+    }
+}
+
+
+if (empty($courses_to_display)) {
+    throw new moodle_exception('nocoursesfound', 'block_studentperformancepredictor');
+}
+
+// Determine which course to display
+if ($courseid == 0 || !isset($courses_to_display[$courseid])) {
+    // If no course is selected or the selected course is invalid, default to the first one
+    $firstcourse = reset($courses_to_display);
+    $courseid = $firstcourse->id;
+}
+
+$course = get_course($courseid);
+$context = context_course::instance($courseid);
+
+// Set up page layout
+$PAGE->set_url(new moodle_url('/blocks/studentperformancepredictor/reports.php', array('courseid' => $courseid)));
+$PAGE->set_title(get_string('detailedreport', 'block_studentperformancepredictor'));
+$PAGE->set_heading(get_string('detailedreport', 'block_studentperformancepredictor'));
+$PAGE->set_pagelayout('standard');
+
+// Output starts here
+echo $OUTPUT->header();
+echo $OUTPUT->heading(get_string('detailedreport', 'block_studentperformancepredictor'));
+
+// Show teacher view with course selector
+$renderer = $PAGE->get_renderer('block_studentperformancepredictor');
+$teacherview = new \block_studentperformancepredictor\output\teacher_view($courseid, $courses_to_display);
+echo $renderer->render_teacher_view($teacherview);
+
+// Output footer
+echo $OUTPUT->footer();
+
+<?php
+// blocks/studentperformancepredictor/settings.php
+
+defined('MOODLE_INTERNAL') || die;
+
+if ($ADMIN->fulltree) {
+    // Backend integration settings
+    $settings->add(new admin_setting_heading('block_studentperformancepredictor/backendsettings',
+        get_string('backendsettings', 'block_studentperformancepredictor'),
+        get_string('backendsettings_desc', 'block_studentperformancepredictor')));
+
+    // For Railway deployment, the default URL should match the Railway app URL
+    $settings->add(new admin_setting_configtext('block_studentperformancepredictor/python_api_url',
+        get_string('python_api_url', 'block_studentperformancepredictor'),
+        get_string('python_api_url_desc', 'block_studentperformancepredictor'),
+        'https://your-railway-app-name.up.railway.app'));
+
+    $settings->add(new admin_setting_configpasswordunmask('block_studentperformancepredictor/python_api_key',
+        get_string('python_api_key', 'block_studentperformancepredictor'),
+        get_string('python_api_key_desc', 'block_studentperformancepredictor'),
+        'changeme'));
+
+    // Refresh interval for automatic predictions
+    $settings->add(new admin_setting_configtext('block_studentperformancepredictor/refreshinterval',
+        get_string('refreshinterval', 'block_studentperformancepredictor'),
+        get_string('refreshinterval_desc', 'block_studentperformancepredictor'),
+        24, PARAM_INT));
+
+    // Risk threshold settings
+    $settings->add(new admin_setting_heading('block_studentperformancepredictor/riskthresholds',
+        get_string('riskthresholds', 'block_studentperformancepredictor'),
+        get_string('riskthresholds_desc', 'block_studentperformancepredictor')));
+
+    $settings->add(new admin_setting_configtext('block_studentperformancepredictor/lowrisk',
+        get_string('lowrisk', 'block_studentperformancepredictor'),
+        get_string('lowrisk_desc', 'block_studentperformancepredictor'),
+        0.7, PARAM_FLOAT));
+
+    $settings->add(new admin_setting_configtext('block_studentperformancepredictor/mediumrisk',
+        get_string('mediumrisk', 'block_studentperformancepredictor'),
+        get_string('mediumrisk_desc', 'block_studentperformancepredictor'),
+        0.4, PARAM_FLOAT));
+
+    // Algorithm settings
+    $settings->add(new admin_setting_heading('block_studentperformancepredictor/algorithmsettings',
+        get_string('algorithmsettings', 'block_studentperformancepredictor'),
+        get_string('algorithmsettings_desc', 'block_studentperformancepredictor')));
+
+    $algorithms = [
+        'randomforest' => get_string('algorithm_randomforest', 'block_studentperformancepredictor'),
+        'logisticregression' => get_string('algorithm_logisticregression', 'block_studentperformancepredictor'),
+        'svm' => get_string('algorithm_svm', 'block_studentperformancepredictor'),
+        'decisiontree' => get_string('algorithm_decisiontree', 'block_studentperformancepredictor'),
+        'knn' => get_string('algorithm_knn', 'block_studentperformancepredictor')
+    ];
+
+    $settings->add(new admin_setting_configselect('block_studentperformancepredictor/defaultalgorithm',
+        get_string('defaultalgorithm', 'block_studentperformancepredictor'),
+        get_string('defaultalgorithm_desc', 'block_studentperformancepredictor'),
+        'randomforest', $algorithms));
+
+    // Python backend monitoring settings
+    $settings->add(new admin_setting_heading('block_studentperformancepredictor/backendmonitoring',
+        get_string('backendmonitoring', 'block_studentperformancepredictor', '', true),
+        get_string('backendmonitoring_desc', 'block_studentperformancepredictor', '', true)));
+
+    // Add a button to test the backend connection
+    $testbackendurl = new moodle_url('/blocks/studentperformancepredictor/admin/testbackend.php');
+    $settings->add(new admin_setting_description(
+        'block_studentperformancepredictor/testbackend',
+        get_string('testbackend', 'block_studentperformancepredictor', '', true),
+        html_writer::link($testbackendurl, get_string('testbackendbutton', 'block_studentperformancepredictor'),
+            ['class' => 'btn btn-secondary', 'target' => '_blank'])
+    ));
+
+    // Debug mode settings
+    $settings->add(new admin_setting_heading('block_studentperformancepredictor/debugsettings',
+        get_string('debugsettings', 'block_studentperformancepredictor', '', true),
+        get_string('debugsettings_desc', 'block_studentperformancepredictor', '', true)));
+
+    $settings->add(new admin_setting_configcheckbox('block_studentperformancepredictor/enabledebug',
+        get_string('enabledebug', 'block_studentperformancepredictor', '', true),
+        get_string('enabledebug_desc', 'block_studentperformancepredictor', '', true),
+        0));
+}
+
+/* Main block styles */
+.block_studentperformancepredictor {
+    padding: 15px;
+}
+
+.block_studentperformancepredictor .spp-heading {
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+/* Accessibility: Focus styles for all interactive elements */
+.block_studentperformancepredictor a:focus,
+.block_studentperformancepredictor button:focus,
+.block_studentperformancepredictor .btn:focus,
+.block_studentperformancepredictor [tabindex]:focus {
+    outline: 2px solid #005cbf;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 2px #b8daff;
+}
+.block_studentperformancepredictor a:focus-visible,
+.block_studentperformancepredictor button:focus-visible,
+.block_studentperformancepredictor .btn:focus-visible {
+    outline: 2px solid #005cbf;
+    outline-offset: 2px;
+}
+
+/* Prediction stats styles */
+.block_studentperformancepredictor .spp-prediction-stats {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.block_studentperformancepredictor .spp-probability {
+    margin-bottom: 10px;
+}
+
+.block_studentperformancepredictor .spp-probability .spp-label,
+.block_studentperformancepredictor .spp-risk .spp-label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 5px;
+}
+
+.block_studentperformancepredictor .spp-probability .spp-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+/* Risk level styles with improved contrast */
+.block_studentperformancepredictor .spp-risk {
+    margin-bottom: 10px;
+}
+
+.block_studentperformancepredictor .spp-risk .spp-value {
+    font-weight: 600;
+}
+
+.block_studentperformancepredictor .spp-risk-high {
+    color: #b3001b;
+    background: #f8d7da;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+.block_studentperformancepredictor .spp-risk-medium {
+    color: #b36b00;
+    background: #fff3cd;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+.block_studentperformancepredictor .spp-risk-low {
+    color: #1e7e34;
+    background: #d4edda;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+.block_studentperformancepredictor .spp-risk-unknown {
+    color: #6c757d;
+    background: #e2e3e5;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+
+/* Update time styles */
+.block_studentperformancepredictor .spp-update-time {
+    font-size: 0.85rem;
+    color: #6c757d;
+    margin-top: 5px;
+}
+
+/* Chart container styles */
+.block_studentperformancepredictor .spp-chart-container {
+    height: 250px;
+    margin: 15px 0;
+}
+
+/* Suggestions styles */
+.block_studentperformancepredictor .spp-suggestions {
+    margin-top: 20px;
+}
+
+.block_studentperformancepredictor .spp-suggestions h5 {
+    margin-bottom: 15px;
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-suggestions-list .list-group-item {
+    transition: background-color 0.2s;
+    border-left: 3px solid transparent;
+}
+
+.block_studentperformancepredictor .spp-suggestions-list .list-group-item:hover {
+    background-color: #f8f9fa;
+}
+
+.block_studentperformancepredictor .spp-suggestion-content h6 {
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-suggestion-content p {
+    color: #495057;
+    margin-bottom: 10px;
+}
+
+.block_studentperformancepredictor .spp-suggestion-actions {
+    margin-top: 10px;
+}
+
+.block_studentperformancepredictor .spp-suggestion-actions .btn {
+    margin-right: 5px;
+    margin-bottom: 5px;
+}
+
+.block_studentperformancepredictor .spp-suggestion-actions .badge {
+    margin-right: 5px;
+}
+
+/* Admin interface styles */
+.block_studentperformancepredictor .spp-admin-actions {
+    margin-bottom: 20px;
+}
+
+.block_studentperformancepredictor .spp-course-overview {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.block_studentperformancepredictor .spp-stat-total {
+    margin-bottom: 15px;
+    border-bottom: 1px solid #e9ecef;
+    padding-bottom: 10px;
+}
+
+.block_studentperformancepredictor .spp-stat-total .spp-label {
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-stat-total .spp-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-left: 10px;
+}
+
+.block_studentperformancepredictor .spp-risk-distribution .spp-label {
+    display: inline-block;
+    width: 100px;
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-risk-distribution > div {
+    margin-bottom: 8px;
+}
+
+/* Loading indicator */
+.block_studentperformancepredictor .spp-loading {
+    text-align: center;
+    padding: 20px;
+    color: #6c757d;
+}
+
+.block_studentperformancepredictor .spp-loading i {
+    margin-right: 10px;
+}
+
+/* Form styles */
+.block_studentperformancepredictor .spp-form-container {
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.block_studentperformancepredictor .spp-form-container .form-group {
+    margin-bottom: 15px;
+}
+
+/* Table styles */
+.block_studentperformancepredictor .spp-table {
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+.block_studentperformancepredictor .spp-table th {
+    background-color: #f8f9fa;
+    border-bottom: 2px solid #dee2e6;
+    padding: 12px;
+    font-weight: 500;
+}
+
+.block_studentperformancepredictor .spp-table td {
+    padding: 12px;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.block_studentperformancepredictor .spp-table tr:hover {
+    background-color: #f8f9fa;
+}
+
+/* Course selector styling */
+.spp-course-selector-container {
+    margin-bottom: 15px;
+}
+
+.spp-course-selector {
+    width: 100%;
+    max-width: 100%;
+    margin-bottom: 10px;
+}
+
+.spp-course-selector .custom-select {
+    width: 100%;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 8px 12px;
+    background-color: #f8f9fa;
+}
+
+.spp-course-selector .custom-select:focus {
+    border-color: #80bdff;
+    outline: 0;
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+/* Global model indicator */
+.spp-model-type {
+    margin-top: 5px;
+    padding: 5px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    border-left: 3px solid #17a2b8;
+}
+
+/* Responsive styles */
+@media (max-width: 768px) {
+    .block_studentperformancepredictor .spp-chart-container {
+        height: 200px;
+    }
+    .block_studentperformancepredictor .col-md-6 {
+        margin-bottom: 15px;
+    }
+    .block_studentperformancepredictor .spp-admin-actions .btn-group {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+    }
+    .block_studentperformancepredictor .spp-admin-actions .btn {
+        margin-bottom: 5px;
+        border-radius: 4px !important;
+    }
+    .block_studentperformancepredictor .spp-risk-distribution .spp-label {
+        width: auto;
+        margin-right: 10px;
+    }
+    .block_studentperformancepredictor .spp-heading {
+        font-size: 1rem;
+    }
+    .spp-course-selector {
+        margin-bottom: 15px;
+    }
+
+    .spp-course-selector .custom-select {
+        font-size: 14px;
+    }
+}
+
+/* Risk category cards */
+.spp-risk-card {
+    margin-bottom: 15px;
+    border: none;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.spp-risk-card .card-header {
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.spp-risk-card .card-header:hover {
+    background-color: #f0f0f0;
+}
+
+.spp-risk-high-card .card-header {
+    background-color: #f8d7da;
+    color: #721c24;
+    border-left: 4px solid #dc3545;
+}
+
+.spp-risk-medium-card .card-header {
+    background-color: #fff3cd;
+    color: #856404;
+    border-left: 4px solid #ffc107;
+}
+
+.spp-risk-low-card .card-header {
+    background-color: #d4edda;
+    color: #155724;
+    border-left: 4px solid #28a745;
+}
+
+/* Student table styling */
+.spp-risk-card .table {
+    margin-bottom: 0;
+}
+
+.spp-risk-card .table th {
+    font-weight: 500;
+    border-top: none;
+}
+
+.spp-risk-card ul.list-unstyled li {
+    margin-bottom: 5px;
+}
+
+/* Badge styling */
+.spp-risk-card .badge {
+    font-size: 90%;
+    padding: 5px 8px;
+}
+
+/* Admin dashboard styling */
+.admin-dashboard .spp-courses-table {
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+.admin-dashboard .spp-courses-table .table {
+    background-color: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border-radius: 4px;
+}
+
+.admin-dashboard .spp-courses-table .table th {
+    background-color: #f8f9fa;
+    border-bottom: 2px solid #dee2e6;
+}
+
+.admin-dashboard .badge {
+    font-size: 90%;
+    font-weight: 400;
+    padding: 4px 7px;
+}
+
+/* Course filter styling */
+.spp-course-filter {
+    margin-bottom: 20px;
+}
+
+.spp-course-filter .alert {
+    padding: 10px 15px;
+    margin-bottom: 0;
+}
+
+/* Hover effect for course rows */
+.spp-courses-table tbody tr {
+    transition: background-color 0.2s;
+}
+
+.spp-courses-table tbody tr:hover {
+    background-color: #f0f4f7;
+}
+
+/* Additional risk indicator styling */
+.admin-dashboard .spp-risk-high-card {
+    border-left: 4px solid #dc3545;
+}
+
+.admin-dashboard .spp-risk-medium-card {
+    border-left: 4px solid #ffc107;
+}
+
+.admin-dashboard .spp-risk-low-card {
+    border-left: 4px solid #28a745;
+}
+
+/* Course name and badge positioning */
+.spp-courses-table .badge {
+    margin-left: 5px;
+    vertical-align: middle;
+}
+
+/* Add spacing between buttons */
+.btn-group .btn {
+    margin-right: 5px;
+}
+
+.btn-group .btn:last-child {
+    margin-right: 0;
+}
+
+/* Better spacing for standalone buttons */
+.spp-admin-controls .btn,
+.spp-teacher-actions .btn,
+.mt-3 .btn {
+    margin-right: 10px;
+    margin-bottom: 5px;
+}
+
+/* Adjust spacing between stats and risk lists */
+.block_studentperformancepredictor .spp-course-overview {
+    margin-bottom: 20px;
+}
+
+.block_studentperformancepredictor .spp-stats {
+    margin-bottom: 15px;
+}
+
+.block_studentperformancepredictor .spp-student-risk-sections {
+    margin-top: 20px;  /* Reduced from larger value */
+}
+
+/* Spacing within stats display */
+.block_studentperformancepredictor .spp-stat-total {
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+}
+
+.block_studentperformancepredictor .spp-risk-distribution > div {
+    margin-bottom: 5px;  /* Reduced from 8px */
+}
+
+/* Success highlight for updated rows */
+tr.table-success {
+    background-color: #d4edda !important;
+    transition: background-color 1s;
+}
+
+/* Model metrics styling */
+.model-metrics {
+    margin-bottom: 20px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+}
+
+.model-metrics h4 {
+    margin-bottom: 15px;
+}
+
+.model-metrics .list-group-item-warning {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+/* Badge with warning */
+.badge.badge-warning {
+    background-color: #ffc107;
+    color: #212529;
+}
+
+/* Feature importance visualization */
+.model-metrics .list-group-item {
+    position: relative;
+    padding-right: 40px;
+}
+
+.model-metrics .list-group-item .importance-bar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    background-color: rgba(40, 167, 69, 0.1);
+    z-index: 0;
+}
+
+/* Badge indicators */
+.badge-success, .badge-warning, .badge-danger {
+    font-size: 90%;
+    font-weight: 400;
+    padding: 4px 7px;
+}
+
+/* Add spacing between action buttons in tables */
+td > .btn, td > form {
+    margin-right: 5px;
+}
+
+<?php
+// blocks/studentperformancepredictor/version.php
+
+defined('MOODLE_INTERNAL') || die();
+
+$plugin->version   = 2025063006;        // The current plugin version (Date: YYYYMMDDXX).
+$plugin->requires  = 2022112800;        // Requires Moodle 4.1 or later.
+$plugin->component = 'block_studentperformancepredictor'; // Full name of the plugin.
+$plugin->maturity  = MATURITY_STABLE;
+$plugin->release   = '1.1.0';           // Updated for global model support
 
 And I have a another directory for the fastapi for training the model.
 ML Backend
@@ -7313,6 +10252,15 @@ FROM python:3.10-slim
 # Set working directory
 WORKDIR /app
 
+# Install system dependencies required for scientific libraries
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    libgomp1 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy requirements file
 COPY requirements.txt .
 
@@ -7337,7 +10285,7 @@ web: uvicorn ml_backend:app --host=0.0.0.0 --port=8000
 """
 Machine Learning API for Student Performance Prediction
 
-A simple API that trains models and makes predictions.
+An enhanced API that trains models and makes predictions with confidence intervals.
 """
 
 import os
@@ -7347,6 +10295,7 @@ import logging
 import traceback
 import tempfile
 import shutil
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Union
 
@@ -7359,19 +10308,43 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 from dotenv import load_dotenv
+from scipy import stats
 
 # ML imports
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, RobustScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, AdaBoostClassifier
 from sklearn.impute import SimpleImputer
+from sklearn.feature_selection import SelectFromModel
+from sklearn.calibration import CalibratedClassifierCV
+
+# Import the requested boosting algorithms
+try:
+    import xgboost as xgb
+    from xgboost import XGBClassifier
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+    logging.warning("XGBoost not available. Install with: pip install xgboost")
+
+try:
+    import catboost
+    from catboost import CatBoostClassifier
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
+    logging.warning("CatBoost not available. Install with: pip install catboost")
+
+try:
+    import lightgbm as lgb
+    from lightgbm import LGBMClassifier
+    LIGHTGBM_AVAILABLE = True
+except ImportError:
+    LIGHTGBM_AVAILABLE = False
+    logging.warning("LightGBM not available. Install with: pip install lightgbm")
 
 # Load environment variables
 load_dotenv()
@@ -7383,11 +10356,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Set up FastAPI app - simplified for API only
+# Set up FastAPI app
 app = FastAPI(
     title="Student Performance Predictor API",
-    description="Machine Learning API for Student Performance Prediction",
-    version="1.0.0"
+    description="Enhanced Machine Learning API for Student Performance Prediction with confidence intervals",
+    version="1.2.0"
 )
 
 # Enable CORS
@@ -7409,38 +10382,25 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 # Models cache
 MODEL_CACHE = {}
 
-# Pydantic models for requests and responses
-class TrainRequest(BaseModel):
-    courseid: int
-    algorithm: str = "randomforest"  # Default to RandomForest
-    target_column: str = "final_outcome"
-    id_columns: List[str] = []
-    test_size: float = 0.2
-
-    class Config:
-        # Allow arbitrary types for field values
-        arbitrary_types_allowed = True
-
+# Pydantic models for responses
 class TrainResponse(BaseModel):
     model_id: str
     algorithm: str
-    metrics: Dict[str, Optional[float]]  # Allow None for metrics like roc_auc
+    metrics: Dict[str, Any]
     feature_names: List[str]
     target_classes: List[Any]
     trained_at: str
     training_time_seconds: float
     model_path: Optional[str] = None
 
-class PredictRequest(BaseModel):
-    model_id: str
-    features: Dict[str, Any]
-
 class PredictResponse(BaseModel):
     prediction: Any
     probability: float
     probabilities: List[float]
+    confidence_interval: Optional[Dict[str, float]] = None
     model_id: str
     prediction_time: str
+    features: Dict[str, Any]
 
 # API key verification
 async def verify_api_key(x_api_key: str = Header(...)):
@@ -7454,16 +10414,9 @@ async def verify_api_key(x_api_key: str = Header(...)):
 # Exception handler
 @app.exception_handler(Exception)
 async def handle_exception(request: Request, exc: Exception):
-    """
-    Handle any unhandled exceptions and return a friendly error response.
-    """
     error_id = str(uuid.uuid4())
-
-    # Log the exception with a traceback
     logger.error(f"Error ID: {error_id} - Unhandled exception: {str(exc)}")
     logger.error(traceback.format_exc())
-
-    # Return a friendly JSON response
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
@@ -7476,26 +10429,31 @@ async def handle_exception(request: Request, exc: Exception):
 # Simple health check endpoint
 @app.get("/health")
 async def health_check():
-    """
-    Health check endpoint for monitoring.
-    """
     try:
-        # Check models directory exists
         if not os.path.exists(MODELS_DIR):
             os.makedirs(MODELS_DIR, exist_ok=True)
-
-        # Check if we can write to the models directory
         test_file = os.path.join(MODELS_DIR, "healthcheck.txt")
         with open(test_file, "w") as f:
             f.write("Health check")
         os.remove(test_file)
 
+        # Check which algorithms are available
+        algorithms = {
+            "randomforest": True,
+            "extratrees": True,
+            "adaboost": True,
+            "xgboost": XGBOOST_AVAILABLE,
+            "catboost": CATBOOST_AVAILABLE,
+            "lightgbm": LIGHTGBM_AVAILABLE
+        }
+
         return {
             "status": "healthy",
             "time": datetime.now().isoformat(),
-            "version": "1.0.0",
+            "version": "1.2.0",
             "models_dir": MODELS_DIR,
             "models_count": len([f for f in os.listdir(MODELS_DIR) if f.endswith('.joblib')]),
+            "available_algorithms": algorithms,
             "environment": {
                 "debug": os.getenv("DEBUG", "false"),
                 "api_key_configured": API_KEY != "changeme"
@@ -7509,6 +10467,94 @@ async def health_check():
             "time": datetime.now().isoformat()
         }
 
+def calculate_confidence_interval(prob, n=100, confidence=0.95):
+    """Calculate confidence interval for a probability using Wilson score interval."""
+    if n <= 0:
+        return {"lower": prob, "upper": prob, "confidence": confidence}
+
+    z = stats.norm.ppf((1 + confidence) / 2)
+    factor = z / np.sqrt(n)
+
+    # Wilson score interval
+    denominator = 1 + z**2/n
+    center = (prob + z**2/(2*n)) / denominator
+    interval = factor * np.sqrt(prob * (1 - prob) / n + z**2/(4*n**2)) / denominator
+
+    lower = max(0, center - interval)
+    upper = min(1, center + interval)
+
+    return {
+        "lower": float(lower),
+        "upper": float(upper), 
+        "confidence": confidence
+    }
+
+def identify_leaky_features(df, target_column):
+    """
+    Identify and filter out leaky features that could lead to data leakage.
+
+    Returns:
+        filtered_df: DataFrame with leaky features removed
+        leaky_features: List of features identified as potentially leaky
+    """
+    leaky_features = []
+
+    # Known patterns for leaky features
+    leaky_patterns = [
+        r'final.*score',
+        r'final.*grade',
+        r'letter_grade',
+        r'pass[_\s]?fail',
+        r'outcome',
+        r'result',
+        r'grade$',
+        r'total.*grade',
+        r'overall.*score',
+        r'final.*result',
+        r'completion.*status'
+    ]
+
+    # Identify features matching leaky patterns
+    for col in df.columns:
+        col_lower = col.lower()
+        if col != target_column:  # Skip target column itself
+            for pattern in leaky_patterns:
+                if re.search(pattern, col_lower):
+                    leaky_features.append(col)
+                    break
+
+    logger.warning(f"Identified {len(leaky_features)} potentially leaky features: {leaky_features}")
+
+    # Check for high correlation with target
+    if len(df) > 10:  # Only if we have enough samples
+        try:
+            target_series = df[target_column]
+            # For non-numeric targets, convert to numeric
+            if target_series.dtype == 'object' or target_series.dtype.name == 'category':
+                target_numeric = pd.factorize(target_series)[0]
+            else:
+                target_numeric = target_series.values
+
+            remaining_cols = [c for c in df.columns if c != target_column and c not in leaky_features]
+
+            for col in remaining_cols:
+                if df[col].dtype.kind in 'ifc':  # Only numeric columns
+                    try:
+                        # Calculate correlation
+                        corr = np.corrcoef(df[col].astype(float), target_numeric)[0, 1]
+                        if abs(corr) > 0.9:  # Extremely high correlation may indicate data leakage
+                            leaky_features.append(col)
+                            logger.warning(f"Detected highly correlated feature: {col} (correlation: {corr:.4f})")
+                    except:
+                        pass  # Skip on error
+        except Exception as e:
+            logger.warning(f"Error in correlation check: {str(e)}")
+
+    # Return the filtered DataFrame
+    filtered_df = df.drop(columns=leaky_features)
+
+    return filtered_df, leaky_features
+
 @app.post("/train", response_model=TrainResponse, dependencies=[Depends(verify_api_key)])
 async def train_model(
     courseid: int = Form(...),
@@ -7518,34 +10564,25 @@ async def train_model(
     id_columns: str = Form("", description="Comma-separated list of ID columns to ignore"),
     dataset_file: UploadFile = File(...)
 ):
-    """
-    Train a machine learning model with the uploaded dataset.
-    """
     start_time = time.time()
     logger.info(f"Training request received for course {courseid} using {algorithm}")
 
     try:
-        # Parse id_columns from comma-separated string
         id_columns_list = [col.strip() for col in id_columns.split(',')] if id_columns else []
-
-        # Create a temporary file to store the uploaded dataset
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(dataset_file.filename)[1]) as temp_file:
-            # Copy the uploaded file to the temporary file
             shutil.copyfileobj(dataset_file.file, temp_file)
             temp_filepath = temp_file.name
 
         logger.info(f"Uploaded dataset saved to temporary file: {temp_filepath}")
 
-        # Create a request object with the form data
-        request = TrainRequest(
-            courseid=courseid,
-            algorithm=algorithm,
-            target_column=target_column,
-            id_columns=id_columns_list,
-            test_size=test_size
-        )
+        request_data = {
+            "courseid": courseid,
+            "algorithm": algorithm,
+            "target_column": target_column,
+            "id_columns": id_columns_list,
+            "test_size": test_size
+        }
 
-        # Load data
         file_extension = os.path.splitext(dataset_file.filename)[1].lower()
         try:
             if file_extension == '.csv':
@@ -7555,184 +10592,333 @@ async def train_model(
             elif file_extension in ['.xlsx', '.xls']:
                 df = pd.read_excel(temp_filepath)
             else:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Unsupported file format: {file_extension}"
-                )
-
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported file format: {file_extension}")
             logger.info(f"Successfully loaded dataset with {len(df)} rows and {len(df.columns)} columns")
         except Exception as e:
             logger.error(f"Error loading dataset: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Error loading dataset: {str(e)}"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Error loading dataset: {str(e)}")
 
-        # Remove the temporary file after loading
         os.unlink(temp_filepath)
 
-        # Check for dataset size and potential issues
+        # Data quality checks
         if len(df) < 30:
             logger.warning(f"Very small dataset with only {len(df)} samples. Model may not be reliable.")
 
-        # Use a default target column if not found
-        if request.target_column not in df.columns:
-            # Look for common target column names
-            possible_targets = ['final_outcome', 'pass', 'outcome', 'grade', 'result', 'status']
+        # Check for missing values
+        missing_pct = df.isnull().mean() * 100
+        high_missing_cols = missing_pct[missing_pct > 50].index.tolist()
+        if high_missing_cols:
+            logger.warning(f"Columns with >50% missing values: {high_missing_cols}")
+            # Drop columns with too many missing values
+            df = df.drop(columns=high_missing_cols)
+            logger.info(f"Dropped {len(high_missing_cols)} columns with too many missing values")
+
+        # Handle target column
+        if request_data["target_column"] not in df.columns:
+            possible_targets = ['final_outcome', 'pass', 'outcome', 'grade', 'result', 'status', 'final_grade', 'passed']
             for col in possible_targets:
                 if col in df.columns:
-                    logger.info(f"Using '{col}' as target column instead of '{request.target_column}'")
-                    request.target_column = col
+                    logger.info(f"Using '{col}' as target column instead of '{request_data['target_column']}'")
+                    request_data["target_column"] = col
                     break
             else:
-                # Use the last column as target if none found
-                request.target_column = df.columns[-1]
-                logger.warning(f"Target column not found, using last column '{request.target_column}' as target")
+                request_data["target_column"] = df.columns[-1]
+                logger.warning(f"Target column not found, using last column '{request_data['target_column']}' as target")
 
-        # Extract target and features
-        y = df[request.target_column]
-        X = df.drop(columns=[request.target_column] + request.id_columns)
-        feature_names = X.columns.tolist()
+        # Preprocess target - convert to binary if needed
+        y = df[request_data["target_column"]]
 
-        logger.info(f"Features: {feature_names}")
-        logger.info(f"Target distribution: {y.value_counts().to_dict()}")
+        # Handle non-numeric targets
+        if y.dtype == 'object' or y.dtype.name == 'category':
+            logger.info(f"Converting categorical target to numeric. Original values: {y.unique()}")
 
-        # Check for class imbalance
-        class_counts = y.value_counts().to_dict()
-        if len(class_counts) > 1:
-            majority_class_count = max(class_counts.values())
-            minority_class_count = min(class_counts.values())
-            imbalance_ratio = majority_class_count / minority_class_count
-            if imbalance_ratio > 3:
-                logger.warning(f"Significant class imbalance detected: ratio {imbalance_ratio:.2f}. "
-                              f"Applying class weight balancing.")
-                class_weight = 'balanced'
+            # Map common passing terms to 1, failing terms to 0
+            if len(y.unique()) > 2:
+                # Try to map based on common terms
+                pass_terms = ['pass', 'passed', 'complete', 'completed', 'success', 'successful', 'satisfactory', 'yes', 'y', 'true', 't']
+                fail_terms = ['fail', 'failed', 'incomplete', 'unsatisfactory', 'no', 'n', 'false', 'f']
+
+                def map_target(val):
+                    if not isinstance(val, str):
+                        return val
+                    val_lower = str(val).lower()
+                    if any(term in val_lower for term in pass_terms):
+                        return 1
+                    if any(term in val_lower for term in fail_terms):
+                        return 0
+                    return val
+
+                y = y.apply(map_target)
+
+                # If still not binary, use label encoder
+                if len(y.unique()) > 2:
+                    from sklearn.preprocessing import LabelEncoder
+                    le = LabelEncoder()
+                    y = le.fit_transform(y)
+                    logger.info(f"Applied LabelEncoder to target. New values: {np.unique(y)}")
+
             else:
-                class_weight = None
-        else:
-            logger.warning("Only one class found in target. Model will not be useful for prediction.")
-            class_weight = None
+                # Map the two unique values to 0 and 1
+                unique_vals = y.unique()
+                mapping = {unique_vals[0]: 0, unique_vals[1]: 1}
+                y = y.map(mapping)
+                logger.info(f"Mapped target values {unique_vals} to {list(mapping.values())}")
 
-        # Identify numeric and categorical columns
+        # For regression-like targets, convert to binary based on median
+        elif len(y.unique()) > 10:
+            median = y.median()
+            logger.info(f"Converting numeric target to binary using median {median} as threshold")
+            y = (y >= median).astype(int)
+
+        # Print target distribution
+        logger.info(f"Target distribution: {pd.Series(y).value_counts().to_dict()}")
+
+        # Remove ID columns and target column
+        X = df.drop(columns=[request_data["target_column"]] + request_data["id_columns"])
+
+        # NEW: Identify and remove leaky features
+        X, leaky_features = identify_leaky_features(X, request_data["target_column"])
+        logger.warning(f"Removed {len(leaky_features)} leaky features that could cause data leakage")
+
+        # Remove constant features
+        constant_features = [col for col in X.columns if X[col].nunique() <= 1]
+        if constant_features:
+            logger.info(f"Removing {len(constant_features)} constant features")
+            X = X.drop(columns=constant_features)
+
+        # Handle highly correlated features
+        if len(X.select_dtypes(include=['number']).columns) > 10:
+            numeric_X = X.select_dtypes(include=['number'])
+            try:
+                corr_matrix = numeric_X.corr().abs()
+                upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+                # Lower the threshold to 0.85 from 0.95 to be more conservative
+                high_corr_cols = [column for column in upper.columns if any(upper[column] > 0.85)]
+
+                if high_corr_cols:
+                    logger.info(f"Removing {len(high_corr_cols)} highly correlated features")
+                    X = X.drop(columns=high_corr_cols)
+            except Exception as e:
+                logger.warning(f"Error computing correlations: {str(e)}")
+
+        # Check if we have enough features left
+        if X.shape[1] < 3:
+            logger.warning(f"Very few features remain ({X.shape[1]}). Model may not be effective.")
+            # Add a warning note to return to the user
+            warning_note = f"Warning: Only {X.shape[1]} features remain after filtering. Model may have limited predictive power."
+        else:
+            warning_note = None
+
+        feature_names = X.columns.tolist()
+        logger.info(f"Final feature count: {len(feature_names)}")
+        logger.info(f"Features: {feature_names[:10]}{'...' if len(feature_names) > 10 else ''}")
+
+        # Prepare preprocessing pipeline
         numeric_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
         categorical_cols = X.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
 
-        # Create preprocessing pipeline with robust handling
+        logger.info(f"Numeric features: {len(numeric_cols)}, Categorical features: {len(categorical_cols)}")
+
+        # Create robust preprocessing pipeline
         try:
-            # For newer scikit-learn versions (>=1.2)
             encoder = OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore')
         except TypeError:
             # For older scikit-learn versions
             encoder = OneHotEncoder(drop='first', sparse=False, handle_unknown='ignore')
 
+        # Use RobustScaler for better handling of outliers
         preprocessor = ColumnTransformer(
             transformers=[
                 ('num', Pipeline([
-                    ('imputer', SimpleImputer(strategy='median')),  # Use median for robustness to outliers
-                    ('scaler', StandardScaler())
+                    ('imputer', SimpleImputer(strategy='median')), 
+                    ('scaler', RobustScaler())
                 ]), numeric_cols),
                 ('cat', Pipeline([
-                    ('imputer', SimpleImputer(strategy='most_frequent')),
+                    ('imputer', SimpleImputer(strategy='most_frequent')), 
                     ('encoder', encoder)
                 ]), categorical_cols)
             ],
             remainder='drop'
         )
 
-        # Split data with stratification for better class balance
-        try:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=request.test_size, random_state=42, stratify=y
-            )
-        except ValueError:
-            # If stratification fails (e.g., with only one class), fall back to standard split
-            logger.warning("Stratified split failed, falling back to random split")
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=request.test_size, random_state=42
-            )
-
-        # Select algorithm with proper regularization to prevent overfitting
-        if request.algorithm == 'randomforest':
-            # Use fewer trees and limit depth to prevent overfitting
-            model = RandomForestClassifier(
-                n_estimators=100, 
-                max_depth=10,  # Limit depth
-                min_samples_split=5,  # Require more samples to split
-                min_samples_leaf=2,   # Require more samples in leaves
-                class_weight=class_weight,
-                random_state=42
-            )
-        elif request.algorithm == 'logisticregression':
-            # Add L2 regularization
-            model = LogisticRegression(
-                C=1.0,  # Inverse of regularization strength
-                class_weight=class_weight,
-                max_iter=1000, 
-                random_state=42
-            )
-        elif request.algorithm == 'gradientboosting':
-            model = GradientBoostingClassifier(
-                n_estimators=100,
-                learning_rate=0.1,
-                max_depth=3,  # Shallow trees to prevent overfitting
-                subsample=0.8,  # Use 80% of samples per tree
-                random_state=42
-            )
-        elif request.algorithm == 'svm':
-            model = SVC(
-                C=1.0,
-                kernel='rbf',
-                class_weight=class_weight,
-                probability=True, 
-                random_state=42
-            )
-        elif request.algorithm == 'decisiontree':
-            model = DecisionTreeClassifier(
-                max_depth=5,  # Limit depth
-                min_samples_split=5,
-                min_samples_leaf=2,
-                class_weight=class_weight,
-                random_state=42
-            )
-        elif request.algorithm == 'knn':
-            model = KNeighborsClassifier(
-                n_neighbors=5,
-                weights='distance'  # Weight by distance for better performance
-            )
+        # Handle class imbalance
+        class_counts = pd.Series(y).value_counts().to_dict()
+        if len(class_counts) > 1:
+            imbalance_ratio = max(class_counts.values()) / min(class_counts.values())
+            class_weight = 'balanced' if imbalance_ratio > 3 else None
+            if imbalance_ratio > 3:
+                logger.warning(f"Significant class imbalance detected: ratio {imbalance_ratio:.2f}. Applying class weight balancing.")
         else:
-            logger.warning(f"Unsupported algorithm '{request.algorithm}', falling back to RandomForest")
-            model = RandomForestClassifier(
-                n_estimators=100,
-                max_depth=10,
-                min_samples_split=5,
-                min_samples_leaf=2,
-                class_weight=class_weight,
-                random_state=42
-            )
-            request.algorithm = 'randomforest'
+            logger.warning("Only one class found in target. Model will not be useful for prediction.")
+            class_weight = None
 
-        # Create pipeline
+        # Train-test split with stratification when possible
+        try:
+            # NEW: Use stratified k-fold cross-validation for better evaluation
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=request_data["test_size"], 
+                                                              random_state=42, stratify=y)
+        except ValueError:
+            logger.warning("Stratified split failed, falling back to random split")
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=request_data["test_size"], 
+                                                              random_state=42)
+
+        # Define models with your specified algorithms
+        models = {}
+
+        # Random Forest Classifier (Always available)
+        models['randomforest'] = RandomForestClassifier(
+            n_estimators=100, 
+            max_depth=None,  # Changed from 10 to None to prevent underfitting
+            min_samples_split=5, 
+            min_samples_leaf=2, 
+            class_weight=class_weight, 
+            random_state=42,
+            n_jobs=-1  # Use all cores
+        )
+
+        # Extra Trees Classifier (Always available)
+        models['extratrees'] = ExtraTreesClassifier(
+            n_estimators=100, 
+            max_depth=None,  # Changed from 10 to None
+            min_samples_split=5, 
+            min_samples_leaf=2, 
+            class_weight=class_weight, 
+            random_state=42,
+            n_jobs=-1
+        )
+
+        # AdaBoost Classifier (Always available)
+        models['adaboost'] = AdaBoostClassifier(
+            n_estimators=100, 
+            learning_rate=0.1, 
+            random_state=42
+        )
+
+        # XGBoost Classifier (If available)
+        if XGBOOST_AVAILABLE:
+            models['xgboost'] = XGBClassifier(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42,
+                eval_metric='logloss',
+                n_jobs=-1,
+                # For newer versions
+                use_label_encoder=False if hasattr(XGBClassifier, 'use_label_encoder') else None,
+                enable_categorical=True if hasattr(XGBClassifier, 'enable_categorical') else False
+            )
+
+        # CatBoost Classifier (If available)
+        if CATBOOST_AVAILABLE:
+            models['catboost'] = CatBoostClassifier(
+                iterations=100,
+                depth=6,
+                learning_rate=0.1,
+                loss_function='Logloss',
+                verbose=0,
+                random_seed=42
+            )
+
+        # LightGBM Classifier (If available)
+        if LIGHTGBM_AVAILABLE:
+            models['lightgbm'] = LGBMClassifier(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                random_state=42,
+                n_jobs=-1
+            )
+
+        # Select model based on algorithm parameter or fall back to RandomForest
+        if request_data["algorithm"] not in models:
+            logger.warning(f"Requested algorithm '{request_data['algorithm']}' not available, falling back to RandomForest")
+            request_data["algorithm"] = 'randomforest'
+
+        model = models[request_data["algorithm"]]
+
+        # Create pipeline with preprocessor and classifier
         pipeline = Pipeline([
-            ('preprocessor', preprocessor),
+            ('preprocessor', preprocessor), 
             ('classifier', model)
         ])
 
-        # Implement cross-validation for more reliable metrics
-        from sklearn.model_selection import cross_val_score
-        logger.info(f"Performing 5-fold cross-validation")
-        cv_scores = cross_val_score(pipeline, X, y, cv=5, scoring='accuracy')
-        cv_accuracy = np.mean(cv_scores)
-        cv_std = np.std(cv_scores)
+        # Perform k-fold cross-validation (k=5)
+        logger.info("Performing 5-fold cross-validation with stratification")
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
+        cv_accuracy, cv_std = np.mean(cv_scores), np.std(cv_scores)
         logger.info(f"Cross-validation accuracy: {cv_accuracy:.4f} ± {cv_std:.4f}")
 
-        # Train the model on the full training set
-        logger.info(f"Training {request.algorithm} model")
+        # Train the model
+        logger.info(f"Training {request_data['algorithm']} model")
         pipeline.fit(X_train, y_train)
         logger.info("Model training completed")
 
-        # Evaluate
-        y_pred = pipeline.predict(X_test)
-        y_pred_proba = pipeline.predict_proba(X_test)
+        # Special handling for CatBoost
+        if request_data['algorithm'] == 'catboost':
+            # CatBoost doesn't work well with scikit-learn's pipeline for feature names
+            # Save categorical features for CatBoost
+            cat_features = []
+            if categorical_cols:
+                try:
+                    # Get categorical feature indices after preprocessing
+                    cat_features = list(range(len(categorical_cols)))
+                    pipeline.named_steps['classifier'].cat_features = cat_features
+                except Exception as e:
+                    logger.warning(f"Error setting cat_features for CatBoost: {e}")
+
+        # Apply probability calibration for better confidence estimates
+        # Store the original pipeline and use a separate calibrated model
+        original_pipeline = pipeline
+        calibrated_pipeline = None
+
+        if hasattr(original_pipeline, 'predict_proba'):
+            logger.info("Applying probability calibration for reliable confidence estimates")
+            try:
+                # Create a new calibrated classifier
+                calibrated_model = CalibratedClassifierCV(
+                    base_estimator=None,  # Use prefit=False to avoid the named_steps issue
+                    method='sigmoid',  # Changed from isotonic to sigmoid for smaller datasets
+                    cv=3,  # Use 3-fold CV
+                    n_jobs=-1
+                )
+
+                # Apply preprocessor to get transformed data
+                X_train_transformed = original_pipeline.named_steps['preprocessor'].transform(X_train)
+                X_test_transformed = original_pipeline.named_steps['preprocessor'].transform(X_test)
+
+                # Use the transformed data to fit the calibrator
+                calibrated_model.fit(X_train_transformed, y_train)
+
+                # Create a calibrated pipeline
+                calibrated_pipeline = Pipeline([
+                    ('preprocessor', original_pipeline.named_steps['preprocessor']),
+                    ('calibrated_classifier', calibrated_model)
+                ])
+
+                logger.info("Probability calibration completed successfully")
+            except Exception as e:
+                logger.warning(f"Probability calibration failed: {str(e)}")
+                logger.warning("Using uncalibrated model instead")
+                calibrated_pipeline = None
+
+        # Generate predictions and evaluate model
+        if calibrated_pipeline is not None:
+            # Use calibrated predictions
+            y_pred = calibrated_pipeline.predict(X_test)
+            y_pred_proba = calibrated_pipeline.predict_proba(X_test)
+
+            # Store both pipelines
+            pipeline.calibrated_pipeline = calibrated_pipeline
+        else:
+            # Use the regular pipeline
+            y_pred = pipeline.predict(X_test)
+            y_pred_proba = pipeline.predict_proba(X_test)
+            pipeline.calibrated_pipeline = None
 
         # Calculate comprehensive metrics
         metrics = {
@@ -7741,288 +10927,380 @@ async def train_model(
             "cv_std": float(cv_std),
             "precision": float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
             "recall": float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
-            "f1": float(f1_score(y_test, y_pred, average='weighted', zero_division=0))
+            "f1": float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
+            "k_folds": 5,  # Explicitly record k value used for cross-validation
+            "removed_leaky_features": leaky_features  # Add the leaky features to metrics
         }
 
-        # Add ROC AUC if it's a binary classification
+        # Add warning if necessary
+        if warning_note:
+            metrics["warning"] = warning_note
+
+        # Compute ROC AUC for binary classification
         if len(np.unique(y)) == 2:
             try:
                 metrics["roc_auc"] = float(roc_auc_score(y_test, y_pred_proba[:, 1]))
             except (ValueError, IndexError) as e:
-                logger.warning(f"ROC AUC not defined: {str(e)}")
+                logger.warning(f"ROC AUC calculation failed: {str(e)}")
                 metrics["roc_auc"] = None
 
-        # Check for severe overfitting
+        # Check for overfitting
         train_acc = accuracy_score(y_train, pipeline.predict(X_train))
         test_acc = metrics["accuracy"]
-        overfitting_ratio = train_acc / max(test_acc, 0.001)  # Avoid division by zero
+        overfitting_ratio = train_acc / max(test_acc, 0.001)
+        metrics["overfitting_warning"] = overfitting_ratio > 1.2
+        metrics["overfitting_ratio"] = float(overfitting_ratio)
+        metrics["train_accuracy"] = float(train_acc)
+        metrics["test_accuracy"] = float(test_acc)
 
-        if overfitting_ratio > 1.2:
+        if metrics["overfitting_warning"]:
             logger.warning(f"Model may be overfitting: train accuracy={train_acc:.4f}, test accuracy={test_acc:.4f}")
-            metrics["overfitting_warning"] = True
-            metrics["overfitting_ratio"] = float(overfitting_ratio)
-        else:
-            metrics["overfitting_warning"] = False
-            metrics["overfitting_ratio"] = float(overfitting_ratio)
 
-        # Add feature importances if available
+        # Extract feature importance if available
+        feature_importance = None
+
+        # Method to get feature importance from different model types
         if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
-            # Get feature names after preprocessing (if possible)
-            feature_importances = pipeline.named_steps['classifier'].feature_importances_
+            # Random Forest, XGBoost, LightGBM, etc.
+            feature_importance = pipeline.named_steps['classifier'].feature_importances_
+        elif hasattr(pipeline.named_steps['classifier'], 'coef_'):
+            # Linear models
+            feature_importance = np.abs(pipeline.named_steps['classifier'].coef_[0])
+        elif hasattr(pipeline.named_steps['classifier'], 'feature_importance_'):
+            # CatBoost
+            feature_importance = pipeline.named_steps['classifier'].feature_importance_
 
-            # For simplicity, we'll just use the top features
-            if len(feature_importances) == len(feature_names):
-                # Create a dictionary of feature importance
-                importance_dict = dict(zip(feature_names, feature_importances))
-                # Sort by importance
-                sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                # Get top 10 features
-                top_features = sorted_features[:10]
-                metrics["top_features"] = {str(k): float(v) for k, v in top_features}
+        if feature_importance is not None:
+            try:
+                # Get transformed feature names if possible
+                feature_names_out = []
 
-        # Convert all metric values to float or None
-        metrics = {k: (float(v) if v is not None and not isinstance(v, bool) and not isinstance(v, dict) else v) 
-                  for k, v in metrics.items()}
+                # Try to get column names after preprocessing
+                try:
+                    # For newer scikit-learn versions
+                    if hasattr(pipeline.named_steps['preprocessor'], 'get_feature_names_out'):
+                        feature_names_out = pipeline.named_steps['preprocessor'].get_feature_names_out()
+                    # For older scikit-learn versions
+                    elif hasattr(pipeline.named_steps['preprocessor'], 'get_feature_names'):
+                        feature_names_out = pipeline.named_steps['preprocessor'].get_feature_names()
+                    else:
+                        # Create generic feature names
+                        feature_names_out = [f"feature_{i}" for i in range(len(feature_importance))]
+                except Exception as e:
+                    logger.warning(f"Error getting transformed feature names: {str(e)}")
+                    feature_names_out = [f"feature_{i}" for i in range(len(feature_importance))]
 
-        logger.info(f"Model metrics: {metrics}")
+                # Ensure lengths match
+                if len(feature_names_out) == len(feature_importance):
+                    importance_dict = dict(zip(feature_names_out, feature_importance))
+                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                    metrics["top_features"] = {str(k): float(v) for k, v in sorted_features[:10]}
+                else:
+                    logger.warning(f"Feature name length mismatch: {len(feature_names_out)} names, {len(feature_importance)} importances")
+                    # Use generic feature names
+                    top_indices = np.argsort(feature_importance)[-10:][::-1]
+                    metrics["top_features"] = {f"feature_{i}": float(feature_importance[i]) for i in top_indices}
+            except Exception as e:
+                logger.warning(f"Error extracting feature importance: {str(e)}")
+                metrics["top_features"] = {}
+        else:
+            logger.info("Model does not support feature importance")
+            metrics["top_features"] = {}
 
-        # Generate model ID
+        # Add confusion matrix
+        try:
+            cm = confusion_matrix(y_test, y_pred)
+            metrics["confusion_matrix"] = cm.tolist()
+        except Exception as e:
+            logger.warning(f"Error computing confusion matrix: {str(e)}")
+
+        # Calculate confidence intervals for predictions
+        # Use the effective sample size for confidence intervals
+        effective_n = min(len(X_test), 100)  # Cap at 100 to avoid overconfidence
+        metrics["confidence_interval"] = calculate_confidence_interval(
+            metrics["accuracy"], 
+            n=effective_n, 
+            confidence=0.95
+        )
+
+        # Generate unique model ID and save the model
         model_id = str(uuid.uuid4())
-
-        # Create course directory
-        course_models_dir = os.path.join(MODELS_DIR, f"course_{request.courseid}")
+        course_models_dir = os.path.join(MODELS_DIR, f"course_{request_data['courseid']}")
         os.makedirs(course_models_dir, exist_ok=True)
+        model_path = os.path.join(course_models_dir, f"{model_id}.joblib")
 
-        # Save model
-        model_filename = f"{model_id}.joblib"
-        model_path = os.path.join(course_models_dir, model_filename)
-
+        # Store model metadata
         model_data = {
             'pipeline': pipeline,
             'feature_names': feature_names,
-            'algorithm': request.algorithm,
+            'algorithm': request_data["algorithm"],
             'trained_at': datetime.now().isoformat(),
-            'target_classes': list(pipeline.classes_),
+            'target_classes': list(np.unique(y)),
             'metrics': metrics,
-            'cv_scores': cv_scores.tolist()
+            'cv_scores': cv_scores.tolist(),
+            'effective_sample_size': effective_n,
+            'leaky_features': leaky_features  # Store the leaky features for reference
         }
 
+        # Save model to disk and cache
         joblib.dump(model_data, model_path)
         MODEL_CACHE[model_id] = model_data
-
         logger.info(f"Model saved to {model_path}")
 
+        # Calculate training time
         training_time = time.time() - start_time
         logger.info(f"Training completed in {training_time:.2f} seconds")
 
+        # Return comprehensive model information
         return {
             "model_id": model_id,
-            "algorithm": request.algorithm,
+            "algorithm": request_data["algorithm"],
             "metrics": metrics,
             "feature_names": [str(f) for f in feature_names],
-            "target_classes": [int(c) if isinstance(c, (np.integer, np.int64, np.int32)) else c for c in pipeline.classes_],
+            "target_classes": [int(c) if isinstance(c, (np.integer, np.int64, np.int32)) else c for c in np.unique(y)],
             "trained_at": datetime.now().isoformat(),
             "training_time_seconds": training_time,
-            "model_path": model_path  # Added model path for the Moodle plugin
+            "model_path": model_path
         }
-
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"Error training model: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error training model: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error training model: {str(e)}")
 
 @app.post("/predict", dependencies=[Depends(verify_api_key)])
 async def predict(request: dict):
-    """
-    Make a prediction using a trained model.
-    Support both single and batch predictions.
-    """
     try:
         model_id = request.get("model_id")
         features = request.get("features")
 
         if not model_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="model_id is required"
-            )
-
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="model_id is required")
         if not features:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="features are required"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="features are required")
 
-        # Check if features is a list of lists/dicts (batch) or just a single list/dict
         is_batch = isinstance(features, list) and len(features) > 0 and isinstance(features[0], (list, dict))
+        logger.info(f"Prediction request for model {model_id} ({'batch' if is_batch else 'single'})")
 
-        # Log the request for debugging
-        logger.info(f"Prediction request for model {model_id}")
-        logger.info(f"Feature data type: {'batch' if is_batch else 'single'}")
-
-        # Load model
-        model_data = None
-        if model_id in MODEL_CACHE:
-            model_data = MODEL_CACHE[model_id]
-            logger.info(f"Using cached model {model_id}")
-        else:
-            # Search for model file
+        # Load model from cache or disk
+        model_data = MODEL_CACHE.get(model_id)
+        if not model_data:
             found = False
-            for root, dirs, files in os.walk(MODELS_DIR):
-                for file in files:
-                    if file == f"{model_id}.joblib":
-                        model_path = os.path.join(root, file)
-                        logger.info(f"Loading model from {model_path}")
-                        model_data = joblib.load(model_path)
-                        MODEL_CACHE[model_id] = model_data
-                        found = True
-                        break
-                if found:
+            for root, _, files in os.walk(MODELS_DIR):
+                if f"{model_id}.joblib" in files:
+                    model_path = os.path.join(root, f"{model_id}.joblib")
+                    logger.info(f"Loading model from {model_path}")
+                    model_data = joblib.load(model_path)
+                    MODEL_CACHE[model_id] = model_data
+                    found = True
                     break
-
             if not found:
                 logger.error(f"Model with ID {model_id} not found")
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Model with ID {model_id} not found"
-                )
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Model with ID {model_id} not found")
 
-        # Get pipeline and feature names
         pipeline = model_data['pipeline']
         feature_names = model_data['feature_names']
-        logger.info(f"Model feature names: {feature_names}")
+        effective_n = model_data.get('effective_sample_size', 50)  # Default to 50 if not stored
+        algorithm = model_data.get('algorithm', 'unknown')
+        leaky_features = model_data.get('leaky_features', [])
 
-        # Create DataFrame from input
+        logger.info(f"Model algorithm: {algorithm}")
+        logger.info(f"Model feature names: {len(feature_names)} features")
+
+        # Prepare input data
         try:
-            if is_batch:
-                logger.info(f"Processing batch prediction with {len(features)} samples")
-                input_df = pd.DataFrame(features)
-            else:
-                logger.info("Processing single prediction")
-                input_df = pd.DataFrame([features])
+            input_df = pd.DataFrame([features] if not is_batch else features)
 
-            # Add missing features with default values
+            # Remove any leaky features from input data
+            for lf in leaky_features:
+                if lf in input_df.columns:
+                    logger.info(f"Removing leaky feature {lf} from prediction input")
+                    input_df = input_df.drop(columns=[lf])
+
+            # Handle missing columns
             for feat in feature_names:
                 if feat not in input_df.columns:
                     logger.info(f"Adding missing feature {feat} with default value 0")
                     input_df[feat] = 0
 
-            # Ensure correct column order and only use known features
+            # Select only columns that match the model's feature names
             valid_features = [f for f in feature_names if f in input_df.columns]
             input_df = input_df[valid_features]
+
+            # Log shape info for debugging
             logger.info(f"Input data shape: {input_df.shape}")
+
+            # Additional validation to ensure data matches model expectations
+            if input_df.shape[1] == 0:
+                raise ValueError("No valid features found in input data")
 
         except Exception as e:
             logger.error(f"Error preparing input data: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid feature format: {str(e)}"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid feature format: {str(e)}")
 
         # Make prediction
         logger.info("Making prediction")
         try:
-            predictions = pipeline.predict(input_df).tolist()
-            probabilities = pipeline.predict_proba(input_df).tolist()
-            logger.info(f"Prediction successful: {predictions}")
-            logger.info(f"Probabilities: {probabilities}")
+            # Check if we should use calibrated pipeline
+            if hasattr(pipeline, 'calibrated_pipeline') and pipeline.calibrated_pipeline is not None:
+                logger.info("Using calibrated pipeline for prediction")
+                calibrated_pipeline = pipeline.calibrated_pipeline
+                predictions = calibrated_pipeline.predict(input_df).tolist()
+                probabilities = calibrated_pipeline.predict_proba(input_df).tolist()
+            else:
+                # Use regular pipeline
+                logger.info("Using regular pipeline for prediction")
+                predictions = pipeline.predict(input_df).tolist()
+                probabilities = pipeline.predict_proba(input_df).tolist()
+
+            logger.info(f"Prediction successful")
         except Exception as e:
             logger.error(f"Error during prediction: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error during prediction: {str(e)}"
-            )
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error during prediction: {str(e)}")
 
-        # Format response based on batch or single prediction
+        # Process results based on batch or single prediction
         if is_batch:
-            # Get probabilities for the positive class (usually class 1)
-            # This works for binary classification
-            if len(pipeline.classes_) == 2:
-                positive_class_idx = 1 if 1 in pipeline.classes_ else 0
-                positive_probs = [probs[positive_class_idx] for probs in probabilities]
-            else:
-                # For multiclass, return probability of predicted class
-                positive_probs = [max(probs) for probs in probabilities]
+            # For batch predictions, get probability of positive class
+            target_classes = model_data['target_classes']
+
+            # Find the positive class index (usually 1 in binary classification)
+            positive_class_idx = 1 if len(target_classes) == 2 and 1 in target_classes else 0
+
+            # Get probabilities for the positive class
+            positive_probs = [probs[positive_class_idx] for probs in probabilities] if len(target_classes) == 2 else [max(probs) for probs in probabilities]
+
+            # Calculate confidence intervals for each prediction
+            confidence_intervals = [
+                calculate_confidence_interval(prob, n=effective_n) for prob in positive_probs
+            ]
 
             return {
                 "predictions": predictions,
                 "probabilities": positive_probs,
+                "confidence_intervals": confidence_intervals,
                 "model_id": model_id,
-                "prediction_time": datetime.now().isoformat()
+                "algorithm": algorithm,
+                "prediction_time": datetime.now().isoformat(),
+                "features": features  # Return the batch of features
             }
         else:
+            # For single prediction
             prediction = predictions[0]
 
-            # Get probability of predicted class (for binary, get prob of class 1)
-            if len(pipeline.classes_) == 2:
-                # For binary classification, return prob of positive class (usually 1)
-                positive_class_idx = 1 if 1 in pipeline.classes_ else 0
+            # Get probability of prediction class or positive class for binary classification
+            target_classes = model_data['target_classes']
+
+            if len(target_classes) == 2:
+                # Binary classification - get probability for positive class (usually 1)
+                positive_class_idx = 1 if 1 in target_classes else 0
                 probability = float(probabilities[0][positive_class_idx])
             else:
-                # For multiclass, return probability of predicted class
-                pred_idx = list(pipeline.classes_).index(prediction)
-                probability = float(probabilities[0][pred_idx])
+                # Multi-class - get probability for the predicted class
+                try:
+                    pred_idx = target_classes.index(prediction) if prediction in target_classes else 0
+                    probability = float(probabilities[0][pred_idx])
+                except (ValueError, IndexError):
+                    # Fallback if prediction is not in target classes
+                    pred_idx = 0
+                    probability = float(probabilities[0][pred_idx])
 
+            # Calculate confidence interval for the prediction
+            confidence_interval = calculate_confidence_interval(probability, n=effective_n)
+
+            # Enhanced prediction response with confidence interval
             return {
                 "prediction": prediction,
                 "probability": probability,
                 "probabilities": probabilities[0],
+                "confidence_interval": confidence_interval,
                 "model_id": model_id,
-                "prediction_time": datetime.now().isoformat()
+                "algorithm": algorithm,
+                "prediction_time": datetime.now().isoformat(),
+                "features": features  # Return the input features
             }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"Unhandled error in prediction: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error making prediction: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error making prediction: {str(e)}")
 
-# Add a debug endpoint for file system checking
-@app.get("/debug/filesystem", dependencies=[Depends(verify_api_key)])
-async def debug_filesystem(path: str = None):
-    """Debug endpoint to check filesystem access."""
-    if not os.getenv("DEBUG", "false").lower() == "true":
-        raise HTTPException(status_code=403, detail="Debug mode not enabled")
+@app.get("/models/{course_id}", dependencies=[Depends(verify_api_key)])
+async def list_models(course_id: int):
+    """List all trained models for a specific course"""
+    course_models_dir = os.path.join(MODELS_DIR, f"course_{course_id}")
 
-    result = {
-        "current_dir": os.getcwd(),
-        "models_dir": MODELS_DIR,
-        "models_dir_exists": os.path.exists(MODELS_DIR),
-        "models_dir_writable": os.access(MODELS_DIR, os.W_OK),
-        "models_content": []
-    }
+    if not os.path.exists(course_models_dir):
+        return {"models": []}
 
-    if os.path.exists(MODELS_DIR):
-        result["models_content"] = os.listdir(MODELS_DIR)
+    models = []
+    for filename in os.listdir(course_models_dir):
+        if filename.endswith('.joblib'):
+            model_id = filename.split('.')[0]
+            model_path = os.path.join(course_models_dir, filename)
 
-    if path and os.path.exists(path):
-        result["path_exists"] = True
-        result["path_is_file"] = os.path.isfile(path)
-        result["path_is_dir"] = os.path.isdir(path)
-        result["path_size"] = os.path.getsize(path) if os.path.isfile(path) else None
-        if os.path.isdir(path):
-            result["path_content"] = os.listdir(path)
-    else:
-        result["path_exists"] = False
+            try:
+                # Load model metadata without loading the full model
+                model_data = joblib.load(model_path)
 
-    return result
+                models.append({
+                    "model_id": model_id,
+                    "algorithm": model_data.get('algorithm', 'unknown'),
+                    "accuracy": model_data.get('metrics', {}).get('accuracy', 0),
+                    "cv_accuracy": model_data.get('metrics', {}).get('cv_accuracy', 0),
+                    "trained_at": model_data.get('trained_at', ''),
+                    "file_size_mb": round(os.path.getsize(model_path) / (1024 * 1024), 2),
+                    "removed_leaky_features": model_data.get('leaky_features', [])
+                })
+            except Exception as e:
+                logger.error(f"Error loading model {model_id}: {str(e)}")
+                models.append({
+                    "model_id": model_id,
+                    "error": str(e),
+                    "file_path": model_path
+                })
 
-# For deployment
+    return {"models": models}
+
+@app.get("/model/{model_id}", dependencies=[Depends(verify_api_key)])
+async def get_model_details(model_id: str):
+    """Get detailed information about a specific model"""
+
+    # Try to find the model file
+    model_path = None
+    for root, _, files in os.walk(MODELS_DIR):
+        if f"{model_id}.joblib" in files:
+            model_path = os.path.join(root, f"{model_id}.joblib")
+            break
+
+    if not model_path:
+        raise HTTPException(status_code=404, detail=f"Model with ID {model_id} not found")
+
+    try:
+        # Load model metadata
+        model_data = joblib.load(model_path)
+
+        # Extract key information, but not the actual model pipeline
+        return {
+            "model_id": model_id,
+            "algorithm": model_data.get('algorithm', 'unknown'),
+            "metrics": model_data.get('metrics', {}),
+            "feature_names": model_data.get('feature_names', []),
+            "target_classes": model_data.get('target_classes', []),
+            "trained_at": model_data.get('trained_at', ''),
+            "file_path": model_path,
+            "file_size_mb": round(os.path.getsize(model_path) / (1024 * 1024), 2),
+            "removed_leaky_features": model_data.get('leaky_features', [])
+        }
+    except Exception as e:
+        logger.error(f"Error loading model {model_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error loading model: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
-
     port = int(os.getenv("PORT", 8000))
     debug = os.getenv("DEBUG", "false").lower() == "true"
-
-    print(f"Starting Student Performance Prediction API on port {port}, debug={debug}")
-
+    print(f"Starting Enhanced Student Performance Prediction API on port {port}, debug={debug}")
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 {
@@ -8040,7 +11318,7 @@ if __name__ == "__main__":
   }
 }
 
-# Core web framework
+## Core web framework
 fastapi>=0.104.1
 uvicorn>=0.24.0
 pydantic>=2.4.2
@@ -8058,6 +11336,9 @@ scipy>=1.11.3
 # Machine learning
 scikit-learn>=1.3.2
 joblib>=1.3.2
+xgboost>=2.0.0
+catboost>=1.2
+lightgbm>=4.1.0
 
 # Utilities
 python-dotenv>=1.0.0
