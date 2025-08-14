@@ -185,17 +185,7 @@ async def health_check():
         }
 
 def calculate_confidence_interval(prob, n=100, confidence=0.95):
-    """
-    Calculate confidence interval for a probability using Wilson score interval.
-
-    Parameters:
-        prob (float): Probability estimate
-        n (int): Sample size
-        confidence (float): Confidence level (default: 0.95)
-
-    Returns:
-        dict: Dictionary with lower and upper bounds and confidence level
-    """
+    """Calculate confidence interval for a probability using Wilson score interval."""
     if n <= 0:
         return {"lower": prob, "upper": prob, "confidence": confidence}
 
@@ -220,14 +210,9 @@ def identify_leaky_features(df, target_column):
     """
     Identify and filter out leaky features that could lead to data leakage.
 
-    Parameters:
-        df (pd.DataFrame): Input DataFrame containing features and target
-        target_column (str): Name of the target column
-
     Returns:
-        tuple: (filtered_df, leaky_features)
-            - filtered_df: DataFrame with leaky features removed
-            - leaky_features: List of features identified as potentially leaky
+        filtered_df: DataFrame with leaky features removed
+        leaky_features: List of features identified as potentially leaky
     """
     leaky_features = []
 
@@ -300,10 +285,7 @@ async def train_model(
     logger.info(f"Training request received for course {courseid} using {algorithm}")
 
     try:
-        # Process id columns
-        id_columns_list = [col.strip() for col in id_columns.split(',')] if id_columns and id_columns.strip() else []
-
-        # Save uploaded file to temp location
+        id_columns_list = [col.strip() for col in id_columns.split(',')] if id_columns else []
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(dataset_file.filename)[1]) as temp_file:
             shutil.copyfileobj(dataset_file.file, temp_file)
             temp_filepath = temp_file.name
@@ -318,7 +300,6 @@ async def train_model(
             "test_size": test_size
         }
 
-        # Load dataset based on file extension
         file_extension = os.path.splitext(dataset_file.filename)[1].lower()
         try:
             if file_extension == '.csv':
@@ -330,12 +311,10 @@ async def train_model(
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported file format: {file_extension}")
             logger.info(f"Successfully loaded dataset with {len(df)} rows and {len(df.columns)} columns")
-            logger.info(f"Column names: {df.columns.tolist()}")
         except Exception as e:
             logger.error(f"Error loading dataset: {str(e)}")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Error loading dataset: {str(e)}")
 
-        # Clean up temp file
         os.unlink(temp_filepath)
 
         # Data quality checks
@@ -362,14 +341,6 @@ async def train_model(
             else:
                 request_data["target_column"] = df.columns[-1]
                 logger.warning(f"Target column not found, using last column '{request_data['target_column']}' as target")
-
-        # Remove ID columns explicitly
-        if id_columns_list:
-            # Only drop columns that actually exist in the dataframe
-            id_cols_to_drop = [col for col in id_columns_list if col in df.columns]
-            if id_cols_to_drop:
-                logger.info(f"Dropping specified ID columns: {id_cols_to_drop}")
-                df = df.drop(columns=id_cols_to_drop)
 
         # Preprocess target - convert to binary if needed
         y = df[request_data["target_column"]]
@@ -403,10 +374,6 @@ async def train_model(
                     y = le.fit_transform(y)
                     logger.info(f"Applied LabelEncoder to target. New values: {np.unique(y)}")
 
-                    # Store label encoder mapping for reference
-                    target_mapping = dict(zip(le.classes_, range(len(le.classes_))))
-                    logger.info(f"Target mapping: {target_mapping}")
-
             else:
                 # Map the two unique values to 0 and 1
                 unique_vals = y.unique()
@@ -423,23 +390,8 @@ async def train_model(
         # Print target distribution
         logger.info(f"Target distribution: {pd.Series(y).value_counts().to_dict()}")
 
-        # Remove target column from features
-        X = df.drop(columns=[request_data["target_column"]])
-
-        # Additional automatic ID column detection
-        potential_id_cols = []
-        for col in X.columns:
-            # Check if column name contains typical ID patterns
-            if any(pattern in col.lower() for pattern in ['id', '_id', 'uuid', 'guid', 'key']):
-                # Verify it's likely an ID by checking uniqueness
-                if X[col].nunique() > 0.8 * len(X):  # If more than 80% values are unique
-                    potential_id_cols.append(col)
-                    logger.info(f"Detected potential ID column: {col}")
-
-        # Drop detected ID columns
-        if potential_id_cols:
-            logger.info(f"Automatically removing {len(potential_id_cols)} detected ID columns")
-            X = X.drop(columns=potential_id_cols)
+        # Remove ID columns and target column
+        X = df.drop(columns=[request_data["target_column"]] + request_data["id_columns"])
 
         # NEW: Identify and remove leaky features
         X, leaky_features = identify_leaky_features(X, request_data["target_column"])
@@ -474,7 +426,6 @@ async def train_model(
         else:
             warning_note = None
 
-        # Log final feature list
         feature_names = X.columns.tolist()
         logger.info(f"Final feature count: {len(feature_names)}")
         logger.info(f"Features: {feature_names[:10]}{'...' if len(feature_names) > 10 else ''}")
@@ -615,13 +566,6 @@ async def train_model(
         # Perform k-fold cross-validation (k=5)
         logger.info("Performing 5-fold cross-validation with stratification")
         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-
-        # Handle cases where there's not enough data for 5 folds
-        n_splits = min(5, min(pd.Series(y).value_counts()))
-        if n_splits < 5:
-            logger.warning(f"Not enough samples for 5-fold CV. Using {n_splits}-fold instead.")
-            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-
         cv_scores = cross_val_score(pipeline, X, y, cv=cv, scoring='accuracy')
         cv_accuracy, cv_std = np.mean(cv_scores), np.std(cv_scores)
         logger.info(f"Cross-validation accuracy: {cv_accuracy:.4f} ± {cv_std:.4f}")
@@ -649,7 +593,7 @@ async def train_model(
         original_pipeline = pipeline
         calibrated_pipeline = None
 
-        if hasattr(original_pipeline.named_steps['classifier'], 'predict_proba'):
+        if hasattr(original_pipeline, 'predict_proba'):
             logger.info("Applying probability calibration for reliable confidence estimates")
             try:
                 # Create a new calibrated classifier
@@ -701,11 +645,8 @@ async def train_model(
             "precision": float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
             "recall": float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
             "f1": float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
-            "k_folds": n_splits,  # Record k value used for cross-validation
-            "removed_leaky_features": leaky_features,  # Add the leaky features to metrics
-            "original_target_column": request_data["target_column"],  # Record original target column
-            "id_columns_removed": id_columns_list + potential_id_cols,  # Combined list of removed ID columns
-            "feature_count": len(feature_names)  # Total number of features used
+            "k_folds": 5,  # Explicitly record k value used for cross-validation
+            "removed_leaky_features": leaky_features  # Add the leaky features to metrics
         }
 
         # Add warning if necessary
@@ -736,19 +677,15 @@ async def train_model(
         feature_importance = None
 
         # Method to get feature importance from different model types
-        try:
-            if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
-                # Random Forest, XGBoost, LightGBM, etc.
-                feature_importance = pipeline.named_steps['classifier'].feature_importances_
-            elif hasattr(pipeline.named_steps['classifier'], 'coef_'):
-                # Linear models
-                feature_importance = np.abs(pipeline.named_steps['classifier'].coef_[0])
-            elif hasattr(pipeline.named_steps['classifier'], 'feature_importance_'):
-                # CatBoost
-                feature_importance = pipeline.named_steps['classifier'].feature_importance_
-        except Exception as e:
-            logger.warning(f"Error accessing feature importance: {str(e)}")
-            feature_importance = None
+        if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
+            # Random Forest, XGBoost, LightGBM, etc.
+            feature_importance = pipeline.named_steps['classifier'].feature_importances_
+        elif hasattr(pipeline.named_steps['classifier'], 'coef_'):
+            # Linear models
+            feature_importance = np.abs(pipeline.named_steps['classifier'].coef_[0])
+        elif hasattr(pipeline.named_steps['classifier'], 'feature_importance_'):
+            # CatBoost
+            feature_importance = pipeline.named_steps['classifier'].feature_importance_
 
         if feature_importance is not None:
             try:
@@ -819,9 +756,7 @@ async def train_model(
             'metrics': metrics,
             'cv_scores': cv_scores.tolist(),
             'effective_sample_size': effective_n,
-            'leaky_features': leaky_features,  # Store the leaky features for reference
-            'id_columns': id_columns_list + potential_id_cols,  # Store the ID columns
-            'original_column_names': df.columns.tolist()  # Store original column names for reference
+            'leaky_features': leaky_features  # Store the leaky features for reference
         }
 
         # Save model to disk and cache
@@ -885,7 +820,6 @@ async def predict(request: dict):
         effective_n = model_data.get('effective_sample_size', 50)  # Default to 50 if not stored
         algorithm = model_data.get('algorithm', 'unknown')
         leaky_features = model_data.get('leaky_features', [])
-        id_columns = model_data.get('id_columns', [])
 
         logger.info(f"Model algorithm: {algorithm}")
         logger.info(f"Model feature names: {len(feature_names)} features")
@@ -894,22 +828,13 @@ async def predict(request: dict):
         try:
             input_df = pd.DataFrame([features] if not is_batch else features)
 
-            # Log the original columns from the input
-            logger.info(f"Input columns: {input_df.columns.tolist()}")
-
-            # Remove ID columns from prediction data
-            for col in id_columns:
-                if col in input_df.columns:
-                    logger.info(f"Removing ID column {col} from prediction input")
-                    input_df = input_df.drop(columns=[col])
-
             # Remove any leaky features from input data
             for lf in leaky_features:
                 if lf in input_df.columns:
                     logger.info(f"Removing leaky feature {lf} from prediction input")
                     input_df = input_df.drop(columns=[lf])
 
-            # Handle missing columns - add zeros for any features expected by the model but not in input
+            # Handle missing columns
             for feat in feature_names:
                 if feat not in input_df.columns:
                     logger.info(f"Adding missing feature {feat} with default value 0")
@@ -919,26 +844,12 @@ async def predict(request: dict):
             valid_features = [f for f in feature_names if f in input_df.columns]
             input_df = input_df[valid_features]
 
-            # Ensure we have all required features from the model
-            missing_features = set(feature_names) - set(valid_features)
-            if missing_features:
-                logger.warning(f"Missing {len(missing_features)} features required by the model: {list(missing_features)[:5]}{'...' if len(missing_features) > 5 else ''}")
-
             # Log shape info for debugging
-            logger.info(f"Input data shape after preprocessing: {input_df.shape}")
+            logger.info(f"Input data shape: {input_df.shape}")
 
             # Additional validation to ensure data matches model expectations
             if input_df.shape[1] == 0:
                 raise ValueError("No valid features found in input data")
-
-            # Check data types match
-            for col in input_df.columns:
-                if input_df[col].dtype == 'object' and col in numeric_cols:
-                    logger.warning(f"Column {col} should be numeric but contains string values. Attempting to convert.")
-                    try:
-                        input_df[col] = pd.to_numeric(input_df[col], errors='coerce')
-                    except:
-                        input_df[col] = input_df[col].astype(float)
 
         except Exception as e:
             logger.error(f"Error preparing input data: {str(e)}")
@@ -1056,7 +967,6 @@ async def list_models(course_id: int):
                     "cv_accuracy": model_data.get('metrics', {}).get('cv_accuracy', 0),
                     "trained_at": model_data.get('trained_at', ''),
                     "file_size_mb": round(os.path.getsize(model_path) / (1024 * 1024), 2),
-                    "feature_count": len(model_data.get('feature_names', [])),
                     "removed_leaky_features": model_data.get('leaky_features', [])
                 })
             except Exception as e:
@@ -1097,107 +1007,11 @@ async def get_model_details(model_id: str):
             "trained_at": model_data.get('trained_at', ''),
             "file_path": model_path,
             "file_size_mb": round(os.path.getsize(model_path) / (1024 * 1024), 2),
-            "original_column_names": model_data.get('original_column_names', []),
-            "removed_leaky_features": model_data.get('leaky_features', []),
-            "id_columns": model_data.get('id_columns', [])
+            "removed_leaky_features": model_data.get('leaky_features', [])
         }
     except Exception as e:
         logger.error(f"Error loading model {model_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error loading model: {str(e)}")
-
-@app.delete("/model/{model_id}", dependencies=[Depends(verify_api_key)])
-async def delete_model(model_id: str):
-    """Delete a specific model"""
-
-    # Try to find the model file
-    model_path = None
-    for root, _, files in os.walk(MODELS_DIR):
-        if f"{model_id}.joblib" in files:
-            model_path = os.path.join(root, f"{model_id}.joblib")
-            break
-
-    if not model_path:
-        raise HTTPException(status_code=404, detail=f"Model with ID {model_id} not found")
-
-    try:
-        # Remove from cache if present
-        if model_id in MODEL_CACHE:
-            del MODEL_CACHE[model_id]
-
-        # Delete the file
-        os.remove(model_path)
-        return {"status": "success", "message": f"Model {model_id} successfully deleted"}
-    except Exception as e:
-        logger.error(f"Error deleting model {model_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error deleting model: {str(e)}")
-
-@app.get("/feature-importance/{model_id}", dependencies=[Depends(verify_api_key)])
-async def get_feature_importance(model_id: str):
-    """Get feature importance for a specific model"""
-
-    # Try to find the model file
-    model_path = None
-    for root, _, files in os.walk(MODELS_DIR):
-        if f"{model_id}.joblib" in files:
-            model_path = os.path.join(root, f"{model_id}.joblib")
-            break
-
-    if not model_path:
-        raise HTTPException(status_code=404, detail=f"Model with ID {model_id} not found")
-
-    try:
-        # Load model data
-        model_data = joblib.load(model_path)
-        pipeline = model_data.get('pipeline')
-
-        if not pipeline:
-            raise HTTPException(status_code=500, detail="Model pipeline not found")
-
-        # Extract feature importance
-        feature_importance = None
-
-        try:
-            if hasattr(pipeline.named_steps['classifier'], 'feature_importances_'):
-                feature_importance = pipeline.named_steps['classifier'].feature_importances_
-            elif hasattr(pipeline.named_steps['classifier'], 'coef_'):
-                feature_importance = np.abs(pipeline.named_steps['classifier'].coef_[0])
-            elif hasattr(pipeline.named_steps['classifier'], 'feature_importance_'):
-                feature_importance = pipeline.named_steps['classifier'].feature_importance_
-        except Exception as e:
-            logger.warning(f"Error accessing feature importance: {str(e)}")
-
-        if feature_importance is None:
-            return {"message": "Feature importance not available for this model type"}
-
-        # Try to get feature names
-        feature_names = model_data.get('feature_names', [])
-        transformed_feature_names = []
-
-        try:
-            # Get transformed feature names if possible
-            if hasattr(pipeline.named_steps['preprocessor'], 'get_feature_names_out'):
-                transformed_feature_names = pipeline.named_steps['preprocessor'].get_feature_names_out()
-            elif hasattr(pipeline.named_steps['preprocessor'], 'get_feature_names'):
-                transformed_feature_names = pipeline.named_steps['preprocessor'].get_feature_names()
-        except Exception as e:
-            logger.warning(f"Error getting transformed feature names: {str(e)}")
-
-        # If we couldn't get transformed names, create generic ones
-        if not transformed_feature_names or len(transformed_feature_names) != len(feature_importance):
-            transformed_feature_names = [f"feature_{i}" for i in range(len(feature_importance))]
-
-        # Create feature importance dictionary
-        importance_dict = dict(zip(transformed_feature_names, feature_importance))
-        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-
-        return {
-            "feature_importance": [{"feature": str(k), "importance": float(v)} for k, v in sorted_features],
-            "original_features": feature_names,
-            "algorithm": model_data.get('algorithm', 'unknown')
-        }
-    except Exception as e:
-        logger.error(f"Error getting feature importance for model {model_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting feature importance: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
