@@ -637,6 +637,35 @@ async def train_model(
             y_pred_proba = pipeline.predict_proba(X_test)
             pipeline.calibrated_pipeline = None
 
+        # ================================================================= #
+        # NEW: ADDED CODE FOR TEST DATA CONFIDENCE ANALYSIS                 #
+        # ================================================================= #
+        try:
+            # Get the confidence score for each prediction (the max probability in each row)
+            confidence_scores = np.max(y_pred_proba, axis=1)
+
+            # Create a DataFrame to analyze the results
+            results_df = pd.DataFrame({
+                'true_label': y_test,
+                'predicted_label': y_pred,
+                'confidence': confidence_scores
+            })
+
+            # Add a column to see if the prediction was correct
+            results_df['is_correct'] = (results_df['true_label'] == results_df['predicted_label'])
+
+            # Log the analysis to the console
+            logger.info("Confidence score analysis for the test set:")
+            if not results_df[results_df['is_correct']].empty:
+                logger.info("Scores for CORRECT predictions:\n" + str(results_df[results_df['is_correct']]['confidence'].describe()))
+            if not results_df[~results_df['is_correct']].empty:
+                logger.info("Scores for INCORRECT predictions (borderline cases):\n" + str(results_df[~results_df['is_correct']]['confidence'].describe()))
+        except Exception as e:
+            logger.warning(f"Could not perform confidence analysis on test data: {str(e)}")
+        # ================================================================= #
+        # END OF NEW CODE                                                   #
+        # ================================================================= #
+
         # Calculate comprehensive metrics
         metrics = {
             "accuracy": float(accuracy_score(y_test, y_pred)),
